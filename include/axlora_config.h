@@ -9,8 +9,8 @@
 namespace axlora {
 
 static constexpr uint8_t MAX_CALLSIGN_LEN = 10;
-static constexpr uint8_t MAX_PAYLOAD_LEN = 180;
-static constexpr uint8_t MAX_PACKET_BYTES = 220;
+static constexpr uint8_t MAX_PAYLOAD_LEN = 255;
+static constexpr uint16_t MAX_PACKET_BYTES = 330;
 static constexpr uint8_t MAX_FRAGMENT_PAYLOAD = 96;
 static constexpr uint8_t MAX_FRAGMENTS = 8;
 static constexpr uint8_t DEFAULT_TTL = 4;
@@ -26,4 +26,3 @@ static constexpr uint32_t RELAY_DEFER_MS = 120;
 static constexpr uint32_t NEIGHBOR_TTL_MS = 600000;
 
 }
-

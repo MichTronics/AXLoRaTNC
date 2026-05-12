@@ -1,77 +1,99 @@
-# AXLoRa
+# AXLoRaTNC
 
-AXLoRa is a compact LoRa packet-radio mesh stack for ESP32-class boards. The first MVP targets an ESP32 DevKit V1 with an EBYTE E22 SX1262 SPI module, while the source tree is arranged around isolated hardware variants for future Heltec, LilyGo, SX1276, OLED, GPS, BLE, and custom-board support.
+AXLoRaTNC is a real AX.25 packet-radio TNC for ESP32 + LoRa. AX.25 Level 2 frames remain AX.25 frames; LoRa only replaces the classic AFSK/FSK modem layer.
+
+## Target
+
+- ESP32 DevKit V1
+- EBYTE E22 SX1262 SPI LoRa module
+- PlatformIO
+- Arduino framework
+- RadioLib
 
 ## Build
 
 ```sh
-pio run -e devkitv1_e22
-pio run -e heltec_v3
-pio run -e tbeam
+./venv/bin/pio run -e devkitv1_e22
 ```
 
-The active variant is selected by each PlatformIO environment with a build flag such as:
+## LoRa Defaults
 
-```ini
-[env:devkitv1_e22]
-extends = common
-build_flags =
-    -DAXLORA_VARIANT_DEVKITV1_E22
-    -Ivariants/devkitv1_e22
-```
+The `devkitv1_e22` default radio settings are:
 
-Shared PlatformIO settings live in the root `platformio.ini`; each hardware variant keeps its own environment in `variants/<name>/platformio.ini`.
-
-## Initial Wiring: DevKit V1 + EBYTE E22-900 SX1262
-
-For the `devkitv1_e22` variant, the default target is an ESP32 DevKit V1 wired to an EBYTE E22-900M30S or E22-900M33S module.
-
-| E22-900 pin | ESP32 DevKit V1 |
-| --- | --- |
-| SCK | GPIO18 |
-| MISO | GPIO19 |
-| MOSI | GPIO23 |
-| NSS / CS | GPIO5 |
-| DIO1 | GPIO33 |
-| BUSY | GPIO32 |
-| NRST | GPIO25 |
-| RXEN | GPIO14 |
-| TXEN | GPIO13 |
-| Status LED | GPIO2 |
-| Battery ADC | GPIO35 |
-| DS18B20 data | GPIO27 |
-| AM2302 data | GPIO26 |
-
-Set your node callsign in `variants/devkitv1_e22/variant.h` before flashing multiple nodes.
-
-The default `devkitv1_e22` RF settings are SX1262, 869.480 MHz, SF8, BW62.5, CR 4/8, private sync word `0x12`, 22 dBm max output power, DIO3 TCXO at 1.8 V, and external RXEN/TXEN RF switch control.
+- Frequency: `869.525 MHz`
+- Bandwidth: `125 kHz`
+- Spreading factor: `SF7`
+- Coding rate: `4/5`
+- Sync word: `0x12`
+- AX.25 FCS is kept inside the LoRa payload
+- RadioLib packet CRC is enabled
 
 ## Serial Console
 
-Open the monitor at `115200` baud.
+Open the serial monitor at `115200` baud.
 
 Commands:
 
 - `help`
 - `info`
-- `callsign`
-- `setcall <callsign>`
-- `neighbors`
-- `send <callsign> <message>`
-- `stats`
 - `radio`
-- `setfreq <mhz>`
-- `setpower <dbm>`
+- `ax25`
+- `connect <CALLSIGN-SSID>`
+- `disconnect`
+- `sendui <DEST> <message>`
+- `send <message>`
+- `stats`
 
-Use `CQ` as a broadcast destination.
+Example:
+
+```text
+sendui PD4MV-0 hello over AX.25 LoRa
+connect PD4MV-1
+send connected mode test
+disconnect
+```
+
+## KISS
+
+USB serial also accepts KISS frames:
+
+- `FEND 0xC0`
+- `FESC 0xDB`
+- `TFEND 0xDC`
+- `TFESC 0xDD`
+- data frames
+- TX delay parameter
+- persistence parameter
+- slot time parameter
+- full duplex parameter
+
+KISS data frames are treated as complete AX.25 frames from the host, with AX.25 FCS appended before LoRa transmit. Received LoRa AX.25 frames are FCS-checked and emitted back as KISS data frames without the FCS, like a normal KISS TNC.
 
 ## Architecture
 
-- `variants/<name>/` defines hardware pins, features, radio type, default frequency, and power limits.
-- `src/radio/` owns all RadioLib usage and exposes a stable PHY abstraction.
-- `src/protocol/` owns compact binary packets, CRCs, ACK state, duplicate suppression, and fragmentation.
-- `src/mesh/` owns flooding relay, TTL enforcement, neighbor observation, and future routing hooks.
-- `src/app/` owns the chat MVP and serial console.
-- `src/util/` contains fixed-size helpers and timing/logging utilities.
+```text
+Application / KISS serial
+AX.25 Level 2
+AX.25 frame encoder/decoder
+LoRa packet transport adapter
+RadioLib SX1262 driver
+```
 
-The MVP avoids Arduino `String`, STL containers, heap-heavy structures, and blocking application delays. Packet queues, ACK trackers, dedup tables, reassembly slots, and neighbor entries use fixed storage.
+RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` does not depend on RadioLib.
+
+## Implemented
+
+- AX.25 callsign + SSID address encoding/decoding
+- Destination/source/repeater address fields
+- UI frames
+- I frames
+- S frames: RR, RNR, REJ
+- U frames: SABM, UA, DISC, DM, UI
+- AX.25 CRC-16 FCS
+- Modulo-8 sequence numbers
+- Basic connected-mode state machine
+- T1 retry timer and N2 retry limit
+- KISS serial framing
+- LoRa transport of one complete AX.25 frame per LoRa packet
+- Variant folder for `devkitv1_e22`
+

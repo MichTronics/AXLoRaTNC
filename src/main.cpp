@@ -1,17 +1,13 @@
 #include <Arduino.h>
 #include "axlora_config.h"
-#include "app/chat.h"
-#include "app/console.h"
-#include "mesh/relay.h"
 #include "radio/radio.h"
+#include "tnc/tnc.h"
 #include "util/log.h"
 #include "util/timer.h"
 
 namespace {
 
-axlora::mesh::MeshNode meshNode;
-axlora::app::ChatApp chat(meshNode);
-axlora::app::Console console(meshNode, chat);
+axlora::tnc::Tnc tnc;
 bool radioReady = false;
 uint32_t lastRadioInitMs = 0;
 static constexpr uint32_t RADIO_INIT_RETRY_MS = 5000;
@@ -36,19 +32,16 @@ void setup() {
   if (axlora::variant::PIN_LED_RX >= 0) {
     pinMode(axlora::variant::PIN_LED_RX, OUTPUT);
   }
-  LOG_INFO("boot AXLoRa");
-  meshNode.begin(axlora::variant::DEFAULT_CALLSIGN);
+  LOG_INFO("boot AXLoRaTNC");
+  tnc.begin(axlora::variant::DEFAULT_CALLSIGN);
 
   serviceRadioInit(true);
-  console.begin();
-  meshNode.printInfo();
+  Serial.println("AXLoRaTNC commands: help, info, radio, ax25, connect <CALLSIGN-SSID>, disconnect, sendui <DEST> <message>, send <message>, stats");
+  tnc.printInfo();
 }
 
 void loop() {
-  console.loop();
   serviceRadioInit(false);
-  if (radioReady) {
-    meshNode.loop();
-  }
+  tnc.loop(radioReady);
   taskYIELD();
 }

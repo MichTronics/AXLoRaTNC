@@ -34,6 +34,7 @@ class Sx1262Driver final : public Driver {
     if constexpr (variant::HAS_EXTERNAL_RF_SWITCH) {
       radio_.setRfSwitchPins(radioLibPin(variant::PIN_RADIO_RXEN), radioLibPin(variant::PIN_RADIO_TXEN));
     }
+    radio_.setCRC(true);
     radio_.startReceive();
     return Result::Ok;
   }

@@ -40,7 +40,7 @@ bool isBroadcast(const char* callsign) {
 }
 
 bool encode(const Packet& packet, uint8_t* out, size_t outCap, size_t& outLen) {
-  if (packet.payloadLen > MAX_PAYLOAD_LEN || outCap < FIXED_HEADER_LEN + packet.payloadLen) {
+  if (outCap < FIXED_HEADER_LEN + packet.payloadLen) {
     return false;
   }
 
@@ -70,7 +70,7 @@ bool decode(const uint8_t* data, size_t len, Packet& packet) {
     return false;
   }
   const uint8_t payloadLen = data[29];
-  if (payloadLen > MAX_PAYLOAD_LEN || len != FIXED_HEADER_LEN + payloadLen) {
+  if (len != FIXED_HEADER_LEN + payloadLen) {
     return false;
   }
   uint8_t headerCopy[FIXED_HEADER_LEN]{};
@@ -113,4 +113,3 @@ const char* packetTypeName(PacketType type) {
 }
 
 }
-
