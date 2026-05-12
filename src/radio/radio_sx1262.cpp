@@ -49,6 +49,7 @@ class Sx1262Driver final : public Driver {
     const uint32_t now = util::nowMs();
     if (!canTransmit(now)) {
       ++stats().dutyDrops;
+      LOG_RADIO("tx deferred by duty-cycle len=%u", static_cast<unsigned>(len));
       return Result::Busy;
     }
     const int16_t state = radio_.transmit(const_cast<uint8_t*>(data), len);
@@ -57,6 +58,7 @@ class Sx1262Driver final : public Driver {
       lastTxMs_ = now;
       lastAirTimeMs_ = estimateAirtimeMs(len);
       ++stats().txOk;
+      LOG_RADIO("tx ok len=%u airtime=%lu ms", static_cast<unsigned>(len), static_cast<unsigned long>(lastAirTimeMs_));
       return Result::Ok;
     }
     ++stats().txFail;
@@ -102,8 +104,10 @@ class Sx1262Driver final : public Driver {
   void standby() override { radio_.standby(); }
 
  private:
-  uint32_t estimateAirtimeMs(size_t len) const {
-    return static_cast<uint32_t>(500 + (len * 12));
+  uint32_t estimateAirtimeMs(size_t len) {
+    const RadioLibTime_t airtimeUs = radio_.getTimeOnAir(len);
+    const uint32_t airtimeMs = static_cast<uint32_t>((airtimeUs + 999) / 1000);
+    return airtimeMs == 0 ? 1 : airtimeMs;
   }
 
   bool canTransmit(uint32_t now) const {

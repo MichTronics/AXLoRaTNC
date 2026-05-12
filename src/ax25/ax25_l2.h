@@ -6,6 +6,7 @@
 #include "ax25_frame.h"
 #include "ax25_timers.h"
 #include "axlora_config.h"
+#include "util/ringbuffer.h"
 
 namespace axlora::ax25 {
 
@@ -33,6 +34,8 @@ struct L2Stats {
   uint32_t retries = 0;
   uint32_t fcsDrops = 0;
   uint32_t stateChanges = 0;
+  uint32_t queued = 0;
+  uint32_t queueDrops = 0;
 };
 
 class LinkLayer {
@@ -46,6 +49,7 @@ class LinkLayer {
   bool connectTo(const Address& destination);
   bool disconnect();
   bool sendConnected(const uint8_t* data, size_t len);
+  size_t connectedQueueSize() const { return txQueue_.size(); }
   void receive(const uint8_t* data, size_t len);
   void printStats() const;
   void printStatus() const;
@@ -54,8 +58,15 @@ class LinkLayer {
   const L2Stats& stats() const { return stats_; }
 
  private:
+  struct QueuedInfo {
+    uint8_t data[MAX_INFO_LEN]{};
+    size_t len = 0;
+  };
+
   void setState(LinkState state);
   bool transmit(const Frame& frame, bool remember);
+  bool sendNextQueued();
+  bool sendIFrame(const uint8_t* data, size_t len);
   bool sendSupervisory(SFrameType type);
   bool sendUnnumbered(UFrameType type);
   void handleI(const Frame& frame);
@@ -79,6 +90,7 @@ class LinkLayer {
   bool hasOutstanding_ = false;
   Timer t1_;
   Timer t3_;
+  axlora::util::RingBuffer<QueuedInfo, 6> txQueue_;
   L2Stats stats_{};
 };
 

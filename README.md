@@ -36,8 +36,16 @@ Commands:
 
 - `help`
 - `info`
+- `mode`
+- `mode console`
+- `mode kiss`
+- `mode ded`
 - `radio`
 - `ax25`
+- `digi`
+- `digi on`
+- `digi off`
+- `digialias <CALLSIGN-SSID|off>`
 - `connect <CALLSIGN-SSID>`
 - `disconnect`
 - `sendui <DEST> <message>`
@@ -50,8 +58,20 @@ Example:
 sendui PD4MV-0 hello over AX.25 LoRa
 connect PD4MV-1
 send connected mode test
+send this line may wait behind the previous I-frame
 disconnect
 ```
+
+## Digipeater
+
+Digipeating is off by default. Enable it from the serial console:
+
+```text
+digi on
+digialias WIDE1-1
+```
+
+The digipeater currently relays AX.25 UI frames only. It looks for the first unrepeated repeater address in the path, matches it against the node callsign or configured alias, sets the repeated/H bit, recalculates the AX.25 FCS, and retransmits the frame over LoRa. A small duplicate cache suppresses repeat loops.
 
 ## KISS
 
@@ -68,6 +88,48 @@ USB serial also accepts KISS frames:
 - full duplex parameter
 
 KISS data frames are treated as complete AX.25 frames from the host, with AX.25 FCS appended before LoRa transmit. Received LoRa AX.25 frames are FCS-checked and emitted back as KISS data frames without the FCS, like a normal KISS TNC.
+
+For F6FBB, BPQ, `kissattach`, and other host software, switch to pure KISS mode:
+
+```text
+mode kiss
+```
+
+This setting is stored in ESP32 NVS and survives reboot. In pure KISS mode no console banner, debug logs, or received text messages are written to USB serial, so the host sees only KISS frames.
+
+To recover the console, send this plain text line over the serial port:
+
+```text
+console
+```
+
+## WA8DED Hostmode
+
+AXLoRaTNC also has an initial WA8DED-style hostmode for F6FBB testing:
+
+```text
+mode ded
+```
+
+This mode is persistent and quiet like pure KISS mode. It implements the binary host exchange:
+
+```text
+host -> tnc: {channel}{info/cmd}{count}{data...}
+tnc -> host: {channel}{code...}
+```
+
+Implemented basics:
+
+- `G`, `G0`, `G1` polling
+- `C <CALLSIGN-SSID>` connect on channel `1`
+- `D` disconnect on channel `1`
+- `L` channel status
+- channel `1` connected data
+- channel `0` unproto/UI data to `CQ`
+- `JHOST0` returns to console mode
+- `JHOST1` acknowledged
+
+For F6FBB direct hostmode, use host type `D` in `port.sys`. This is an initial one-channel implementation intended for testing F6FBB without Linux `kissattach`.
 
 ## Architecture
 
@@ -92,8 +154,9 @@ RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` does 
 - AX.25 CRC-16 FCS
 - Modulo-8 sequence numbers
 - Basic connected-mode state machine
+- Fixed connected-mode TX queue for multiple `send` lines
+- UI-frame digipeater with H-bit update and duplicate suppression
 - T1 retry timer and N2 retry limit
 - KISS serial framing
 - LoRa transport of one complete AX.25 frame per LoRa packet
 - Variant folder for `devkitv1_e22`
-

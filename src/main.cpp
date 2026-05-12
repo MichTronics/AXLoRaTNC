@@ -32,12 +32,14 @@ void setup() {
   if (axlora::variant::PIN_LED_RX >= 0) {
     pinMode(axlora::variant::PIN_LED_RX, OUTPUT);
   }
-  LOG_INFO("boot AXLoRaTNC");
   tnc.begin(axlora::variant::DEFAULT_CALLSIGN);
+  LOG_INFO("boot AXLoRaTNC");
 
   serviceRadioInit(true);
-  Serial.println("AXLoRaTNC commands: help, info, radio, ax25, connect <CALLSIGN-SSID>, disconnect, sendui <DEST> <message>, send <message>, stats");
-  tnc.printInfo();
+  if (!tnc.quietSerialMode()) {
+    Serial.println("AXLoRaTNC commands: help, info, mode, mode console|kiss|ded, radio, ax25, connect <CALLSIGN-SSID>, disconnect, sendui <DEST> <message>, send <message>, stats");
+    tnc.printInfo();
+  }
 }
 
 void loop() {

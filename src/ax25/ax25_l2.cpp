@@ -18,6 +18,7 @@ void LinkLayer::loop() {
     if (retryCount_ >= config_.n2) {
       LOG_PROTO("AX25 N2 exceeded");
       hasOutstanding_ = false;
+      txQueue_.clear();
       t1_.stop();
       setState(LinkState::Disconnected);
       return;
@@ -63,6 +64,7 @@ bool LinkLayer::connectTo(const Address& destination) {
   va_ = 0;
   vr_ = 0;
   retryCount_ = 0;
+  txQueue_.clear();
   setState(LinkState::Connecting);
   return sendUnnumbered(UFrameType::SABM);
 }
@@ -72,11 +74,31 @@ bool LinkLayer::disconnect() {
     return true;
   }
   retryCount_ = 0;
+  txQueue_.clear();
   setState(LinkState::Disconnecting);
   return sendUnnumbered(UFrameType::DISC);
 }
 
 bool LinkLayer::sendConnected(const uint8_t* data, size_t len) {
+  if (state_ != LinkState::Connected || data == nullptr || len == 0) {
+    return false;
+  }
+  if (!hasOutstanding_ && txQueue_.empty()) {
+    return sendIFrame(data, len);
+  }
+  QueuedInfo queued{};
+  queued.len = len > MAX_INFO_LEN ? MAX_INFO_LEN : len;
+  memcpy(queued.data, data, queued.len);
+  if (!txQueue_.push(queued)) {
+    ++stats_.queueDrops;
+    return false;
+  }
+  ++stats_.queued;
+  LOG_PROTO("AX25 queued connected data depth=%u", static_cast<unsigned>(txQueue_.size()));
+  return true;
+}
+
+bool LinkLayer::sendIFrame(const uint8_t* data, size_t len) {
   if (state_ != LinkState::Connected || hasOutstanding_ || data == nullptr || len == 0) {
     return false;
   }
@@ -140,6 +162,22 @@ bool LinkLayer::transmit(const Frame& frame, bool remember) {
   return ok;
 }
 
+bool LinkLayer::sendNextQueued() {
+  if (state_ != LinkState::Connected || hasOutstanding_) {
+    return false;
+  }
+  QueuedInfo queued{};
+  if (!txQueue_.pop(queued)) {
+    return false;
+  }
+  if (!sendIFrame(queued.data, queued.len)) {
+    txQueue_.push(queued);
+    return false;
+  }
+  LOG_PROTO("AX25 sent queued data remaining=%u", static_cast<unsigned>(txQueue_.size()));
+  return true;
+}
+
 bool LinkLayer::sendSupervisory(SFrameType type) {
   Frame frame{};
   frame.destination = peer_;
@@ -201,6 +239,7 @@ void LinkLayer::handleU(const Frame& frame) {
     va_ = 0;
     vr_ = 0;
     hasOutstanding_ = false;
+    txQueue_.clear();
     setState(LinkState::Connected);
     sendUnnumbered(UFrameType::UA);
     t1_.stop();
@@ -213,9 +252,11 @@ void LinkLayer::handleU(const Frame& frame) {
       t1_.stop();
       setState(LinkState::Connected);
       t3_.start(config_.t3Ms);
+      sendNextQueued();
     } else if (state_ == LinkState::Disconnecting) {
       t1_.stop();
       hasOutstanding_ = false;
+      txQueue_.clear();
       setState(LinkState::Disconnected);
     }
     return;
@@ -224,12 +265,14 @@ void LinkLayer::handleU(const Frame& frame) {
     peer_ = frame.source;
     sendUnnumbered(UFrameType::UA);
     hasOutstanding_ = false;
+    txQueue_.clear();
     t1_.stop();
     setState(LinkState::Disconnected);
     return;
   }
   if (type == UFrameType::DM) {
     hasOutstanding_ = false;
+    txQueue_.clear();
     t1_.stop();
     setState(LinkState::Disconnected);
   }
@@ -241,6 +284,7 @@ void LinkLayer::processAck(uint8_t nrValue) {
     va_ = nrValue;
     retryCount_ = 0;
     t1_.stop();
+    sendNextQueued();
   }
 }
 
@@ -249,12 +293,15 @@ bool LinkLayer::addressedToLocal(const Frame& frame) const {
 }
 
 void LinkLayer::printStats() const {
-  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu retries=%lu fcs_drops=%lu\n",
+  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu queued=%lu q_depth=%u q_drops=%lu retries=%lu fcs_drops=%lu\n",
                 stateName(state_),
                 static_cast<unsigned long>(stats_.uiTx),
                 static_cast<unsigned long>(stats_.uiRx),
                 static_cast<unsigned long>(stats_.iTx),
                 static_cast<unsigned long>(stats_.iRx),
+                static_cast<unsigned long>(stats_.queued),
+                static_cast<unsigned>(txQueue_.size()),
+                static_cast<unsigned long>(stats_.queueDrops),
                 static_cast<unsigned long>(stats_.retries),
                 static_cast<unsigned long>(stats_.fcsDrops));
 }
@@ -264,7 +311,8 @@ void LinkLayer::printStatus() const {
   char peer[12]{};
   formatAddress(config_.local, local, sizeof(local));
   formatAddress(peer_, peer, sizeof(peer));
-  Serial.printf("AX25 local=%s peer=%s state=%s VS=%u VA=%u VR=%u\n", local, peer, stateName(state_), vs_, va_, vr_);
+  Serial.printf("AX25 local=%s peer=%s state=%s VS=%u VA=%u VR=%u outstanding=%u q_depth=%u\n",
+                local, peer, stateName(state_), vs_, va_, vr_, hasOutstanding_, static_cast<unsigned>(txQueue_.size()));
 }
 
 const char* LinkLayer::stateName(LinkState state) {
