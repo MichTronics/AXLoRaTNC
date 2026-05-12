@@ -30,6 +30,7 @@ class MeshNode {
   void printNeighbors() const;
   NeighborTable& neighbors() { return neighbors_; }
   const char* callsign() const { return callsign_; }
+  bool setCallsign(const char* callsign);
 
  private:
   struct PendingRelay {
@@ -59,4 +60,3 @@ class MeshNode {
 };
 
 }
-

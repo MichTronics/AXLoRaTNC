@@ -12,9 +12,9 @@ enum class RadioType {
 
 static constexpr RadioType RADIO_TYPE = RadioType::SX1262;
 static constexpr float DEFAULT_FREQUENCY_MHZ = 869.480f;
-static constexpr float DEFAULT_BANDWIDTH_KHZ = 125.0f;
-static constexpr uint8_t DEFAULT_SPREADING_FACTOR = 9;
-static constexpr uint8_t DEFAULT_CODING_RATE = 7;
+static constexpr float DEFAULT_BANDWIDTH_KHZ = 62.5f;
+static constexpr uint8_t DEFAULT_SPREADING_FACTOR = 8;
+static constexpr uint8_t DEFAULT_CODING_RATE = 8;
 static constexpr uint8_t DEFAULT_SYNC_WORD = 0x12;
 static constexpr int8_t DEFAULT_TX_POWER_DBM = 22;
 static constexpr int8_t MAX_TX_POWER_DBM = 22;

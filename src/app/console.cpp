@@ -38,6 +38,19 @@ void Console::handleLine(char* line) {
     printHelp();
   } else if (strcmp(cmd, "info") == 0) {
     mesh_.printInfo();
+  } else if (strcmp(cmd, "callsign") == 0) {
+    Serial.printf("callsign=%s\n", mesh_.callsign());
+  } else if (strcmp(cmd, "setcall") == 0) {
+    char* value = strtok(nullptr, " ");
+    if (value == nullptr) {
+      Serial.println("usage: setcall <callsign>");
+      return;
+    }
+    if (!mesh_.setCallsign(value)) {
+      Serial.println("invalid callsign");
+      return;
+    }
+    Serial.printf("callsign=%s\n", mesh_.callsign());
   } else if (strcmp(cmd, "neighbors") == 0) {
     mesh_.printNeighbors();
   } else if (strcmp(cmd, "stats") == 0) {
@@ -78,8 +91,7 @@ void Console::handleLine(char* line) {
 }
 
 void Console::printHelp() const {
-  Serial.println("AXLoRa commands: help, info, neighbors, send <callsign> <message>, stats, radio, setfreq <mhz>, setpower <dbm>");
+  Serial.println("AXLoRa commands: help, info, callsign, setcall <callsign>, neighbors, send <callsign> <message>, stats, radio, setfreq <mhz>, setpower <dbm>");
 }
 
 }
-

@@ -10,6 +10,18 @@ void MeshNode::begin(const char* callsign) {
   protocol::setCallsign(callsign_, callsign);
 }
 
+bool MeshNode::setCallsign(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return false;
+  }
+  const size_t len = strnlen(callsign, protocol::CALLSIGN_FIELD_LEN + 1);
+  if (len == 0 || len > protocol::CALLSIGN_FIELD_LEN) {
+    return false;
+  }
+  protocol::setCallsign(callsign_, callsign);
+  return true;
+}
+
 bool MeshNode::sendChat(const char* destination, const char* text) {
   if (destination == nullptr || text == nullptr) {
     return false;

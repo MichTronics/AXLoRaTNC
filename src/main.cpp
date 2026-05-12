@@ -5,12 +5,28 @@
 #include "mesh/relay.h"
 #include "radio/radio.h"
 #include "util/log.h"
+#include "util/timer.h"
 
 namespace {
 
 axlora::mesh::MeshNode meshNode;
 axlora::app::ChatApp chat(meshNode);
 axlora::app::Console console(meshNode, chat);
+bool radioReady = false;
+uint32_t lastRadioInitMs = 0;
+static constexpr uint32_t RADIO_INIT_RETRY_MS = 5000;
+
+void serviceRadioInit(bool force) {
+  const uint32_t now = axlora::util::nowMs();
+  if (radioReady || (!force && !axlora::util::elapsed(now, lastRadioInitMs, RADIO_INIT_RETRY_MS))) {
+    return;
+  }
+
+  lastRadioInitMs = now;
+  const axlora::radio::Result radioResult = axlora::radio::driver().init();
+  radioReady = radioResult == axlora::radio::Result::Ok;
+  LOG_RADIO("init result=%s", axlora::radio::resultName(radioResult));
+}
 
 }
 
@@ -23,14 +39,16 @@ void setup() {
   LOG_INFO("boot AXLoRa");
   meshNode.begin(axlora::variant::DEFAULT_CALLSIGN);
 
-  const axlora::radio::Result radioResult = axlora::radio::driver().init();
-  LOG_RADIO("init result=%s", axlora::radio::resultName(radioResult));
+  serviceRadioInit(true);
   console.begin();
   meshNode.printInfo();
 }
 
 void loop() {
   console.loop();
-  meshNode.loop();
+  serviceRadioInit(false);
+  if (radioReady) {
+    meshNode.loop();
+  }
   taskYIELD();
 }

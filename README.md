@@ -44,7 +44,7 @@ For the `devkitv1_e22` variant, the default target is an ESP32 DevKit V1 wired t
 
 Set your node callsign in `variants/devkitv1_e22/variant.h` before flashing multiple nodes.
 
-The default `devkitv1_e22` RF settings are SX1262, 869.480 MHz, SF9, BW125, CR 4/7, private sync word `0x12`, 22 dBm max output power, DIO3 TCXO at 1.8 V, and external RXEN/TXEN RF switch control.
+The default `devkitv1_e22` RF settings are SX1262, 869.480 MHz, SF8, BW62.5, CR 4/8, private sync word `0x12`, 22 dBm max output power, DIO3 TCXO at 1.8 V, and external RXEN/TXEN RF switch control.
 
 ## Serial Console
 
@@ -54,6 +54,8 @@ Commands:
 
 - `help`
 - `info`
+- `callsign`
+- `setcall <callsign>`
 - `neighbors`
 - `send <callsign> <message>`
 - `stats`
