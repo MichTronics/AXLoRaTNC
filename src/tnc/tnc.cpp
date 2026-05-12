@@ -16,6 +16,12 @@ void Tnc::begin(const char* callsign) {
   if (!ax25::parseAddress(callsign, local_)) {
     ax25::parseAddress("N0CALL", local_);
   }
+  if (beacon_.destination.callsign[0] == '\0') {
+    ax25::parseAddress("CQ", beacon_.destination);
+  }
+  if (beacon_.text[0] == '\0') {
+    strncpy(beacon_.text, "AXLoRaTNC LoRa AX.25", sizeof(beacon_.text) - 1);
+  }
   ax25::L2Config config{};
   config.local = local_;
   link_.begin(config, radioTxCallback, dataCallback, this);
@@ -26,6 +32,7 @@ void Tnc::loop(bool radioReady) {
   link_.loop();
   checkLinkStatusEvent();
   if (radioReady) {
+    serviceBeacon(radioReady);
     serviceRadio();
   }
 }
@@ -66,10 +73,23 @@ void Tnc::serviceRadio() {
     emitKissData(rx.data, rx.len - 2);
     ax25::Frame frame{};
     if (ax25::decodeFrame(rx.data, rx.len, frame, true)) {
+      observeHeard(frame, rx.rssi, rx.snr);
       maybeDigipeat(frame);
     }
   }
   link_.receive(rx.data, rx.len);
+}
+
+void Tnc::serviceBeacon(bool radioReady) {
+  if (!radioReady || !beacon_.enabled) {
+    return;
+  }
+  const uint32_t now = axlora::util::nowMs();
+  if (beacon_.lastTxMs != 0 && !axlora::util::elapsed(now, beacon_.lastTxMs, beacon_.intervalMs)) {
+    return;
+  }
+  beacon_.lastTxMs = now;
+  sendBeacon();
 }
 
 void Tnc::serviceSerial() {
@@ -149,7 +169,7 @@ void Tnc::handleConsoleLine(char* line) {
     return;
   }
   if (strcmp(cmd, "help") == 0) {
-    Serial.println("AXLoRaTNC commands: help, info, mode, mode console|kiss|ded, radio, ax25, digi, digi on|off, digialias <CALLSIGN-SSID|off>, connect <CALLSIGN-SSID>, disconnect, sendui <DEST> <message>, send <message>, stats");
+    Serial.println("AXLoRaTNC commands: help, info, mode, radio, ax25, beacon, mheard, digi, connect, disconnect, sendui, send, stats");
   } else if (strcmp(cmd, "info") == 0) {
     printInfo();
   } else if (strcmp(cmd, "mode") == 0) {
@@ -179,6 +199,62 @@ void Tnc::handleConsoleLine(char* line) {
                   static_cast<double>(radio::driver().getSNR()));
   } else if (strcmp(cmd, "ax25") == 0) {
     link_.printStatus();
+  } else if (strcmp(cmd, "beacon") == 0) {
+    char* sub = strtok(nullptr, " ");
+    if (sub == nullptr) {
+      printBeacon();
+    } else if (strcmp(sub, "on") == 0) {
+      beacon_.enabled = true;
+      beacon_.lastTxMs = 0;
+      printBeacon();
+    } else if (strcmp(sub, "off") == 0) {
+      beacon_.enabled = false;
+      printBeacon();
+    } else if (strcmp(sub, "now") == 0) {
+      Serial.println(sendBeacon() ? "beacon sent" : "beacon failed");
+    } else if (strcmp(sub, "text") == 0) {
+      char* text = strtok(nullptr, "");
+      if (text == nullptr) {
+        Serial.println("usage: beacon text <text>");
+      } else {
+        strncpy(beacon_.text, text, sizeof(beacon_.text) - 1);
+        beacon_.text[sizeof(beacon_.text) - 1] = '\0';
+        printBeacon();
+      }
+    } else if (strcmp(sub, "dest") == 0) {
+      char* dest = strtok(nullptr, " ");
+      if (dest == nullptr || !ax25::parseAddress(dest, beacon_.destination)) {
+        Serial.println("usage: beacon dest <CALLSIGN-SSID>");
+      } else {
+        printBeacon();
+      }
+    } else if (strcmp(sub, "interval") == 0) {
+      char* seconds = strtok(nullptr, " ");
+      const long value = seconds == nullptr ? 0 : atol(seconds);
+      if (value < 10 || value > 86400) {
+        Serial.println("usage: beacon interval <10-86400 seconds>");
+      } else {
+        beacon_.intervalMs = static_cast<uint32_t>(value) * 1000UL;
+        printBeacon();
+      }
+    } else if (strcmp(sub, "path") == 0) {
+      char* path = strtok(nullptr, "");
+      if (!setBeaconPath(path)) {
+        Serial.println("usage: beacon path <CALL1-SSID,CALL2-SSID|off>");
+      } else {
+        printBeacon();
+      }
+    } else {
+      Serial.println("usage: beacon [on|off|now|text|dest|interval|path]");
+    }
+  } else if (strcmp(cmd, "mheard") == 0) {
+    char* sub = strtok(nullptr, " ");
+    if (sub != nullptr && strcmp(sub, "clear") == 0) {
+      clearMheard();
+      Serial.println("mheard cleared");
+    } else {
+      printMheard();
+    }
   } else if (strcmp(cmd, "digi") == 0) {
     char* mode = strtok(nullptr, " ");
     if (mode == nullptr) {
@@ -257,6 +333,11 @@ void Tnc::printStats() const {
                 static_cast<unsigned long>(digiTx_),
                 static_cast<unsigned long>(digiDupes_),
                 static_cast<unsigned long>(digiDrops_));
+  Serial.printf("beacon enabled=%u tx=%lu drops=%lu interval_s=%lu\n",
+                beacon_.enabled,
+                static_cast<unsigned long>(beaconTx_),
+                static_cast<unsigned long>(beaconDrops_),
+                static_cast<unsigned long>(beacon_.intervalMs / 1000));
   Serial.printf("radio tx_ok=%lu tx_fail=%lu rx_ok=%lu rx_fail=%lu duty_drops=%lu\n",
                 static_cast<unsigned long>(rs.txOk),
                 static_cast<unsigned long>(rs.txFail),
@@ -389,6 +470,159 @@ void Tnc::printDigipeater() const {
                 static_cast<unsigned long>(digiTx_),
                 static_cast<unsigned long>(digiDupes_),
                 static_cast<unsigned long>(digiDrops_));
+}
+
+void Tnc::observeHeard(const ax25::Frame& frame, float rssi, float snr) {
+  if (ax25::addressEquals(frame.source, local_)) {
+    return;
+  }
+  const uint32_t now = axlora::util::nowMs();
+  MheardEntry* slot = nullptr;
+  for (MheardEntry& entry : mheard_) {
+    if (entry.active && ax25::addressEquals(entry.source, frame.source)) {
+      slot = &entry;
+      break;
+    }
+  }
+  if (slot == nullptr) {
+    for (MheardEntry& entry : mheard_) {
+      if (!entry.active) {
+        slot = &entry;
+        break;
+      }
+    }
+  }
+  if (slot == nullptr) {
+    slot = &mheard_[0];
+    for (MheardEntry& entry : mheard_) {
+      if (entry.lastHeardMs < slot->lastHeardMs) {
+        slot = &entry;
+      }
+    }
+  }
+  if (!slot->active) {
+    *slot = MheardEntry{};
+    slot->active = true;
+    slot->source = frame.source;
+    slot->firstHeardMs = now;
+  }
+  slot->destination = frame.destination;
+  slot->lastHeardMs = now;
+  ++slot->frames;
+  slot->lastRssi = rssi;
+  slot->lastSnr = snr;
+  slot->lastRepeaterCount = frame.repeaterCount;
+  slot->viaDigipeater = false;
+  for (uint8_t i = 0; i < frame.repeaterCount; ++i) {
+    if (frame.repeaters[i].repeated) {
+      slot->viaDigipeater = true;
+      break;
+    }
+  }
+}
+
+void Tnc::printMheard() const {
+  const uint32_t now = axlora::util::nowMs();
+  Serial.println("mheard callsign dest age_s frames rssi snr via path");
+  for (const MheardEntry& entry : mheard_) {
+    if (!entry.active) {
+      continue;
+    }
+    char source[12]{};
+    char destination[12]{};
+    ax25::formatAddress(entry.source, source, sizeof(source));
+    ax25::formatAddress(entry.destination, destination, sizeof(destination));
+    Serial.printf("%s %s %lu %lu %.1f %.1f %s %u\n",
+                  source,
+                  destination,
+                  static_cast<unsigned long>((now - entry.lastHeardMs) / 1000),
+                  static_cast<unsigned long>(entry.frames),
+                  static_cast<double>(entry.lastRssi),
+                  static_cast<double>(entry.lastSnr),
+                  entry.viaDigipeater ? "via" : "direct",
+                  entry.lastRepeaterCount);
+  }
+}
+
+void Tnc::clearMheard() {
+  memset(mheard_, 0, sizeof(mheard_));
+}
+
+bool Tnc::sendBeacon() {
+  ax25::Frame frame{};
+  frame.destination = beacon_.destination;
+  frame.source = local_;
+  frame.repeaterCount = beacon_.pathCount;
+  for (uint8_t i = 0; i < beacon_.pathCount; ++i) {
+    frame.repeaters[i] = beacon_.path[i];
+  }
+  frame.control = ax25::CTRL_UI;
+  frame.pid = ax25::PID_NO_LAYER3;
+  frame.infoLen = strnlen(beacon_.text, sizeof(beacon_.text));
+  memcpy(frame.info, beacon_.text, frame.infoLen);
+  uint8_t bytes[MAX_PACKET_BYTES]{};
+  size_t len = 0;
+  if (!ax25::encodeFrame(frame, bytes, sizeof(bytes), len, true)) {
+    ++beaconDrops_;
+    return false;
+  }
+  const radio::Result result = radio::driver().send(bytes, len);
+  if (result != radio::Result::Ok) {
+    ++beaconDrops_;
+    LOG_WARN("beacon tx failed: %s", radio::resultName(result));
+    return false;
+  }
+  ++beaconTx_;
+  LOG_PROTO("beacon tx");
+  return true;
+}
+
+void Tnc::printBeacon() const {
+  char destination[12]{};
+  ax25::formatAddress(beacon_.destination, destination, sizeof(destination));
+  Serial.printf("beacon=%s dest=%s interval_s=%lu tx=%lu drops=%lu text=\"%s\"\n",
+                beacon_.enabled ? "on" : "off",
+                destination,
+                static_cast<unsigned long>(beacon_.intervalMs / 1000),
+                static_cast<unsigned long>(beaconTx_),
+                static_cast<unsigned long>(beaconDrops_),
+                beacon_.text);
+  Serial.print("beacon path=");
+  if (beacon_.pathCount == 0) {
+    Serial.println("off");
+    return;
+  }
+  for (uint8_t i = 0; i < beacon_.pathCount; ++i) {
+    char path[12]{};
+    ax25::formatAddress(beacon_.path[i], path, sizeof(path));
+    if (i > 0) {
+      Serial.print(",");
+    }
+    Serial.print(path);
+  }
+  Serial.println();
+}
+
+bool Tnc::setBeaconPath(const char* path) {
+  beacon_.pathCount = 0;
+  if (path == nullptr || strcmp(path, "off") == 0 || path[0] == '\0') {
+    return true;
+  }
+  char buffer[80]{};
+  strncpy(buffer, path, sizeof(buffer) - 1);
+  char* token = strtok(buffer, ",");
+  while (token != nullptr && beacon_.pathCount < ax25::MAX_REPEATERS) {
+    while (*token == ' ') {
+      ++token;
+    }
+    if (!ax25::parseAddress(token, beacon_.path[beacon_.pathCount])) {
+      beacon_.pathCount = 0;
+      return false;
+    }
+    ++beacon_.pathCount;
+    token = strtok(nullptr, ",");
+  }
+  return token == nullptr;
 }
 
 void Tnc::serviceWa8ded(uint8_t byte) {

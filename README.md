@@ -42,6 +42,16 @@ Commands:
 - `mode ded`
 - `radio`
 - `ax25`
+- `beacon`
+- `beacon on`
+- `beacon off`
+- `beacon now`
+- `beacon text <text>`
+- `beacon dest <CALLSIGN-SSID>`
+- `beacon interval <seconds>`
+- `beacon path <CALL1-SSID,CALL2-SSID|off>`
+- `mheard`
+- `mheard clear`
 - `digi`
 - `digi on`
 - `digi off`
@@ -72,6 +82,38 @@ digialias WIDE1-1
 ```
 
 The digipeater currently relays AX.25 UI frames only. It looks for the first unrepeated repeater address in the path, matches it against the node callsign or configured alias, sets the repeated/H bit, recalculates the AX.25 FCS, and retransmits the frame over LoRa. A small duplicate cache suppresses repeat loops.
+
+## Beacons And Mheard
+
+AXLoRaTNC can send local AX.25 UI beacons and keep a local heard table.
+
+```text
+beacon text AXLoRaTNC test node
+beacon dest CQ
+beacon path WIDE1-1
+beacon interval 600
+beacon on
+```
+
+Manual beacon:
+
+```text
+beacon now
+```
+
+Show heard stations:
+
+```text
+mheard
+```
+
+Clear heard stations:
+
+```text
+mheard clear
+```
+
+The heard table records source, last destination, age, frame count, RSSI, SNR, whether a repeated/H-bit was seen, and path length.
 
 ## KISS
 
@@ -156,6 +198,8 @@ RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` does 
 - Basic connected-mode state machine
 - Fixed connected-mode TX queue for multiple `send` lines
 - UI-frame digipeater with H-bit update and duplicate suppression
+- Local UI beacon
+- Local mheard table with RSSI/SNR
 - T1 retry timer and N2 retry limit
 - KISS serial framing
 - LoRa transport of one complete AX.25 frame per LoRa packet

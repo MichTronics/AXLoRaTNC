@@ -24,6 +24,16 @@ struct DigipeaterConfig {
   bool hasAlias = false;
 };
 
+struct BeaconConfig {
+  bool enabled = false;
+  ax25::Address destination{};
+  ax25::Address path[ax25::MAX_REPEATERS]{};
+  uint8_t pathCount = 0;
+  uint32_t intervalMs = 600000;
+  uint32_t lastTxMs = 0;
+  char text[96]{};
+};
+
 enum class SerialMode : uint8_t {
   Console = 0,
   Kiss = 1,
@@ -58,10 +68,23 @@ class Tnc {
     uint8_t data[256]{};
     size_t len = 0;
   };
+  struct MheardEntry {
+    bool active = false;
+    ax25::Address source{};
+    ax25::Address destination{};
+    uint32_t firstHeardMs = 0;
+    uint32_t lastHeardMs = 0;
+    uint32_t frames = 0;
+    float lastRssi = 0.0f;
+    float lastSnr = 0.0f;
+    uint8_t lastRepeaterCount = 0;
+    bool viaDigipeater = false;
+  };
 
   static bool radioTxCallback(const uint8_t* data, size_t len, void* ctx);
   static void dataCallback(const uint8_t* data, size_t len, bool connected, void* ctx);
   void serviceRadio();
+  void serviceBeacon(bool radioReady);
   void serviceSerial();
   void handleKiss(const ax25::KissFrame& frame);
   void emitKissData(const uint8_t* frameNoFcs, size_t len);
@@ -76,6 +99,12 @@ class Tnc {
   bool enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   bool popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out);
   void checkLinkStatusEvent();
+  void observeHeard(const ax25::Frame& frame, float rssi, float snr);
+  void printMheard() const;
+  void clearMheard();
+  bool sendBeacon();
+  void printBeacon() const;
+  bool setBeaconPath(const char* path);
   void loadSettings();
   void saveSerialMode(SerialMode mode);
   void setSerialMode(SerialMode mode);
@@ -106,8 +135,12 @@ class Tnc {
   axlora::util::RingBuffer<DedEvent, 12> dedEvents_;
   DigipeaterConfig digi_{};
   DigiCacheEntry digiCache_[16]{};
+  BeaconConfig beacon_{};
+  MheardEntry mheard_[20]{};
   uint32_t rawTx_ = 0;
   uint32_t rawRx_ = 0;
+  uint32_t beaconTx_ = 0;
+  uint32_t beaconDrops_ = 0;
   uint32_t digiTx_ = 0;
   uint32_t digiDupes_ = 0;
   uint32_t digiDrops_ = 0;
