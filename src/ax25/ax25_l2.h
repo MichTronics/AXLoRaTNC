@@ -32,6 +32,7 @@ struct L2Stats {
   uint32_t iRx = 0;
   uint32_t iTx = 0;
   uint32_t retries = 0;
+  uint32_t rejTx = 0;
   uint32_t fcsDrops = 0;
   uint32_t stateChanges = 0;
   uint32_t queued = 0;
@@ -62,12 +63,23 @@ class LinkLayer {
     uint8_t data[MAX_INFO_LEN]{};
     size_t len = 0;
   };
+  struct WindowSlot {
+    bool active = false;
+    Frame frame{};
+  };
 
   void setState(LinkState state);
   bool transmit(const Frame& frame, bool remember);
   bool sendNextQueued();
   bool sendIFrame(const uint8_t* data, size_t len);
-  bool sendSupervisory(SFrameType type);
+  void fillWindow();
+  void clearWindow();
+  bool windowFull() const;
+  bool hasOutstanding() const;
+  uint8_t outstandingCount() const;
+  void retransmitWindow();
+  void storeOutstanding(const Frame& frame);
+  bool sendSupervisory(SFrameType type, bool poll = false);
   bool sendUnnumbered(UFrameType type);
   void handleI(const Frame& frame);
   void handleS(const Frame& frame);
@@ -86,8 +98,9 @@ class LinkLayer {
   uint8_t va_ = 0;
   uint8_t vr_ = 0;
   uint8_t retryCount_ = 0;
-  Frame outstanding_{};
-  bool hasOutstanding_ = false;
+  bool peerBusy_ = false;
+  static constexpr uint8_t WINDOW_SIZE = 4;
+  WindowSlot window_[WINDOW_SIZE]{};
   Timer t1_;
   Timer t3_;
   axlora::util::RingBuffer<QueuedInfo, 6> txQueue_;

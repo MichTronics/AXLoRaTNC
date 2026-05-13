@@ -42,6 +42,15 @@ Commands:
 - `mode ded`
 - `radio`
 - `ax25`
+- `node`
+- `node on`
+- `node off`
+- `node alias <1-6 chars>`
+- `node ident <text>`
+- `node interval <seconds>`
+- `node broadcast`
+- `nodes`
+- `routes`
 - `beacon`
 - `beacon on`
 - `beacon off`
@@ -114,6 +123,45 @@ mheard clear
 ```
 
 The heard table records source, last destination, age, frame count, RSSI, SNR, whether a repeated/H-bit was seen, and path length.
+
+## NET/ROM Node
+
+AXLoRaTNC includes a small standalone NET/ROM-style node layer. It sends and receives NET/ROM NODES broadcasts as AX.25 UI frames using PID `0xCF`, keeps a local route table, and provides a simple connected node shell.
+
+Enable it:
+
+```text
+node alias AXLORA
+node ident AXLoRaTNC LoRa NETROM node
+node interval 1800
+node on
+```
+
+Send a NODES broadcast now:
+
+```text
+node broadcast
+```
+
+Show learned routes:
+
+```text
+nodes
+routes
+```
+
+When another station connects to this node over AX.25 connected mode, the shell supports:
+
+```text
+?
+INFO
+NODES
+ROUTES
+MHEARD
+BYE
+```
+
+This is an embedded NET/ROM MVP intended for standalone LoRa packet experiments. If you run BPQ/LinBPQ, BPQ can still do full NET/ROM routing on the host side through KISS.
 
 ## KISS
 
@@ -200,6 +248,7 @@ RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` does 
 - UI-frame digipeater with H-bit update and duplicate suppression
 - Local UI beacon
 - Local mheard table with RSSI/SNR
+- NET/ROM-style NODES broadcast, route table, and connected node shell
 - T1 retry timer and N2 retry limit
 - KISS serial framing
 - LoRa transport of one complete AX.25 frame per LoRa packet

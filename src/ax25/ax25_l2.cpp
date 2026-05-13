@@ -16,17 +16,21 @@ void LinkLayer::begin(const L2Config& config, TxCallback tx, DataCallback data, 
 void LinkLayer::loop() {
   if (t1_.expired()) {
     if (retryCount_ >= config_.n2) {
-      LOG_PROTO("AX25 N2 exceeded");
-      hasOutstanding_ = false;
+      LOG_PROTO("AX25 N2 exceeded, disconnecting");
+      clearWindow();
       txQueue_.clear();
+      peerBusy_ = false;
       t1_.stop();
       setState(LinkState::Disconnected);
       return;
     }
     ++retryCount_;
     ++stats_.retries;
-    if (hasOutstanding_) {
-      transmit(outstanding_, false);
+    if (state_ == LinkState::Connected && hasOutstanding()) {
+      setState(LinkState::Recovery);
+      sendSupervisory(SFrameType::RR, true);
+    } else if (state_ == LinkState::Recovery) {
+      sendSupervisory(SFrameType::RR, true);
     } else if (state_ == LinkState::Connecting) {
       sendUnnumbered(UFrameType::SABM);
     } else if (state_ == LinkState::Disconnecting) {
@@ -64,6 +68,7 @@ bool LinkLayer::connectTo(const Address& destination) {
   va_ = 0;
   vr_ = 0;
   retryCount_ = 0;
+  peerBusy_ = false;
   txQueue_.clear();
   setState(LinkState::Connecting);
   return sendUnnumbered(UFrameType::SABM);
@@ -83,7 +88,7 @@ bool LinkLayer::sendConnected(const uint8_t* data, size_t len) {
   if (state_ != LinkState::Connected || data == nullptr || len == 0) {
     return false;
   }
-  if (!hasOutstanding_ && txQueue_.empty()) {
+  if (!windowFull() && !peerBusy_ && txQueue_.empty()) {
     return sendIFrame(data, len);
   }
   QueuedInfo queued{};
@@ -99,7 +104,7 @@ bool LinkLayer::sendConnected(const uint8_t* data, size_t len) {
 }
 
 bool LinkLayer::sendIFrame(const uint8_t* data, size_t len) {
-  if (state_ != LinkState::Connected || hasOutstanding_ || data == nullptr || len == 0) {
+  if (state_ != LinkState::Connected || windowFull() || peerBusy_ || data == nullptr || len == 0) {
     return false;
   }
   Frame frame{};
@@ -154,8 +159,7 @@ bool LinkLayer::transmit(const Frame& frame, bool remember) {
   }
   const bool ok = tx_(bytes, len, ctx_);
   if (ok && remember) {
-    outstanding_ = frame;
-    hasOutstanding_ = true;
+    storeOutstanding(frame);
     retryCount_ = 0;
     t1_.start(config_.t1Ms);
   }
@@ -163,7 +167,7 @@ bool LinkLayer::transmit(const Frame& frame, bool remember) {
 }
 
 bool LinkLayer::sendNextQueued() {
-  if (state_ != LinkState::Connected || hasOutstanding_) {
+  if (state_ != LinkState::Connected || windowFull()) {
     return false;
   }
   QueuedInfo queued{};
@@ -178,11 +182,61 @@ bool LinkLayer::sendNextQueued() {
   return true;
 }
 
-bool LinkLayer::sendSupervisory(SFrameType type) {
+void LinkLayer::fillWindow() {
+  while (state_ == LinkState::Connected && !windowFull() && !txQueue_.empty()) {
+    if (!sendNextQueued()) {
+      break;
+    }
+  }
+}
+
+void LinkLayer::clearWindow() {
+  for (WindowSlot& slot : window_) {
+    slot.active = false;
+  }
+}
+
+bool LinkLayer::windowFull() const {
+  return outstandingCount() >= WINDOW_SIZE;
+}
+
+bool LinkLayer::hasOutstanding() const {
+  return outstandingCount() > 0;
+}
+
+uint8_t LinkLayer::outstandingCount() const {
+  uint8_t count = 0;
+  for (const WindowSlot& slot : window_) {
+    if (slot.active) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+void LinkLayer::retransmitWindow() {
+  for (const WindowSlot& slot : window_) {
+    if (slot.active) {
+      transmit(slot.frame, false);
+    }
+  }
+}
+
+void LinkLayer::storeOutstanding(const Frame& frame) {
+  for (WindowSlot& slot : window_) {
+    if (!slot.active) {
+      slot.active = true;
+      slot.frame = frame;
+      return;
+    }
+  }
+}
+
+bool LinkLayer::sendSupervisory(SFrameType type, bool poll) {
   Frame frame{};
   frame.destination = peer_;
   frame.source = config_.local;
-  frame.control = makeS(type, vr_, false);
+  frame.control = makeS(type, vr_, poll);
   return transmit(frame, false);
 }
 
@@ -199,8 +253,16 @@ bool LinkLayer::sendUnnumbered(UFrameType type) {
 }
 
 void LinkLayer::handleI(const Frame& frame) {
-  if (state_ != LinkState::Connected || !addressEquals(frame.source, peer_)) {
+  if (state_ != LinkState::Connected && state_ != LinkState::Recovery) {
     return;
+  }
+  if (!addressEquals(frame.source, peer_)) {
+    return;
+  }
+  if (state_ == LinkState::Recovery) {
+    LOG_PROTO("AX25 I-frame received in recovery, returning to connected");
+    setState(LinkState::Connected);
+    retryCount_ = 0;
   }
   processAck(nr(frame.control));
   if (ns(frame.control) == vr_) {
@@ -209,18 +271,69 @@ void LinkLayer::handleI(const Frame& frame) {
     if (data_ != nullptr) {
       data_(frame.info, frame.infoLen, true, ctx_);
     }
+    sendSupervisory(SFrameType::RR);
+  } else {
+    LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending REJ", ns(frame.control), vr_);
+    ++stats_.rejTx;
+    sendSupervisory(SFrameType::REJ);
   }
-  sendSupervisory(SFrameType::RR);
 }
 
 void LinkLayer::handleS(const Frame& frame) {
-  if (state_ != LinkState::Connected || !addressEquals(frame.source, peer_)) {
+  if (state_ != LinkState::Connected && state_ != LinkState::Recovery) {
     return;
   }
+  if (!addressEquals(frame.source, peer_)) {
+    return;
+  }
+  const bool finalBit = (frame.control & 0x10) != 0;
   processAck(nr(frame.control));
-  if (sType(frame.control) == SFrameType::REJ && hasOutstanding_) {
-    transmit(outstanding_, false);
-    t1_.start(config_.t1Ms);
+  switch (sType(frame.control)) {
+    case SFrameType::RR:
+      if (peerBusy_) {
+        peerBusy_ = false;
+        LOG_PROTO("AX25 peer RNR cleared");
+      }
+      if (state_ == LinkState::Recovery && finalBit) {
+        LOG_PROTO("AX25 recovery complete via RR F=1");
+        setState(LinkState::Connected);
+        retryCount_ = 0;
+        if (hasOutstanding()) {
+          retransmitWindow();
+          t1_.start(config_.t1Ms);
+        } else {
+          t1_.stop();
+          fillWindow();
+        }
+      } else if (state_ == LinkState::Connected && !peerBusy_) {
+        fillWindow();
+      }
+      break;
+    case SFrameType::RNR:
+      if (!peerBusy_) {
+        peerBusy_ = true;
+        LOG_PROTO("AX25 peer RNR busy");
+      }
+      if (state_ == LinkState::Recovery && finalBit) {
+        LOG_PROTO("AX25 recovery: peer busy (RNR F=1), back to connected");
+        setState(LinkState::Connected);
+        retryCount_ = 0;
+        t1_.stop();
+      }
+      break;
+    case SFrameType::REJ:
+      peerBusy_ = false;
+      if (state_ == LinkState::Recovery) {
+        setState(LinkState::Connected);
+        retryCount_ = 0;
+      }
+      if (hasOutstanding()) {
+        retransmitWindow();
+        t1_.start(config_.t1Ms);
+      }
+      break;
+    default:
+      break;
   }
 }
 
@@ -238,11 +351,12 @@ void LinkLayer::handleU(const Frame& frame) {
     vs_ = 0;
     va_ = 0;
     vr_ = 0;
-    hasOutstanding_ = false;
+    peerBusy_ = false;
+    clearWindow();
     txQueue_.clear();
+    t1_.stop();
     setState(LinkState::Connected);
     sendUnnumbered(UFrameType::UA);
-    t1_.stop();
     t3_.start(config_.t3Ms);
     return;
   }
@@ -252,10 +366,10 @@ void LinkLayer::handleU(const Frame& frame) {
       t1_.stop();
       setState(LinkState::Connected);
       t3_.start(config_.t3Ms);
-      sendNextQueued();
+      fillWindow();
     } else if (state_ == LinkState::Disconnecting) {
       t1_.stop();
-      hasOutstanding_ = false;
+      clearWindow();
       txQueue_.clear();
       setState(LinkState::Disconnected);
     }
@@ -264,14 +378,14 @@ void LinkLayer::handleU(const Frame& frame) {
   if (type == UFrameType::DISC) {
     peer_ = frame.source;
     sendUnnumbered(UFrameType::UA);
-    hasOutstanding_ = false;
+    clearWindow();
     txQueue_.clear();
     t1_.stop();
     setState(LinkState::Disconnected);
     return;
   }
   if (type == UFrameType::DM) {
-    hasOutstanding_ = false;
+    clearWindow();
     txQueue_.clear();
     t1_.stop();
     setState(LinkState::Disconnected);
@@ -279,12 +393,31 @@ void LinkLayer::handleU(const Frame& frame) {
 }
 
 void LinkLayer::processAck(uint8_t nrValue) {
-  if (hasOutstanding_ && nrValue == vs_) {
-    hasOutstanding_ = false;
-    va_ = nrValue;
+  bool ackedAny = false;
+  while (va_ != nrValue) {
+    const uint8_t ackSeq = va_;
+    bool found = false;
+    for (WindowSlot& slot : window_) {
+      if (slot.active && ns(slot.frame.control) == ackSeq) {
+        slot.active = false;
+        found = true;
+        ackedAny = true;
+        break;
+      }
+    }
+    va_ = static_cast<uint8_t>((va_ + 1) & 0x07);
+    if (!found && !hasOutstanding()) {
+      break;
+    }
+  }
+  if (ackedAny) {
     retryCount_ = 0;
-    t1_.stop();
-    sendNextQueued();
+    if (hasOutstanding()) {
+      t1_.start(config_.t1Ms);
+    } else {
+      t1_.stop();
+    }
+    fillWindow();
   }
 }
 
@@ -293,7 +426,7 @@ bool LinkLayer::addressedToLocal(const Frame& frame) const {
 }
 
 void LinkLayer::printStats() const {
-  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu queued=%lu q_depth=%u q_drops=%lu retries=%lu fcs_drops=%lu\n",
+  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu queued=%lu q_depth=%u q_drops=%lu retries=%lu rej_tx=%lu fcs_drops=%lu\n",
                 stateName(state_),
                 static_cast<unsigned long>(stats_.uiTx),
                 static_cast<unsigned long>(stats_.uiRx),
@@ -303,6 +436,7 @@ void LinkLayer::printStats() const {
                 static_cast<unsigned>(txQueue_.size()),
                 static_cast<unsigned long>(stats_.queueDrops),
                 static_cast<unsigned long>(stats_.retries),
+                static_cast<unsigned long>(stats_.rejTx),
                 static_cast<unsigned long>(stats_.fcsDrops));
 }
 
@@ -311,8 +445,9 @@ void LinkLayer::printStatus() const {
   char peer[12]{};
   formatAddress(config_.local, local, sizeof(local));
   formatAddress(peer_, peer, sizeof(peer));
-  Serial.printf("AX25 local=%s peer=%s state=%s VS=%u VA=%u VR=%u outstanding=%u q_depth=%u\n",
-                local, peer, stateName(state_), vs_, va_, vr_, hasOutstanding_, static_cast<unsigned>(txQueue_.size()));
+  Serial.printf("AX25 local=%s peer=%s state=%s VS=%u VA=%u VR=%u outstanding=%u win=%u q_depth=%u\n",
+                local, peer, stateName(state_), vs_, va_, vr_,
+                hasOutstanding(), outstandingCount(), static_cast<unsigned>(txQueue_.size()));
 }
 
 const char* LinkLayer::stateName(LinkState state) {
