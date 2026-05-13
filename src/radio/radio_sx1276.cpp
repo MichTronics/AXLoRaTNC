@@ -5,7 +5,7 @@
 #include "util/timer.h"
 #include "util/log.h"
 
-#if defined(AXLORA_VARIANT_TBEAM)
+#if defined(AXLORA_VARIANT_TBEAM) || defined(AXLORA_VARIANT_LILYGO_T3_V161)
 
 namespace axlora::radio {
 namespace {
