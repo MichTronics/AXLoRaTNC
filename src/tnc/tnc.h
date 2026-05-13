@@ -24,6 +24,7 @@ struct KissParams {
 
 struct DigipeaterConfig {
   bool         enabled  = false;
+  bool         allFrames = false;
   ax25::Address alias{};
   bool         hasAlias = false;
 };
@@ -92,7 +93,9 @@ class Tnc {
     ax25::Address source{};
     ax25::Address destination{};
     uint16_t      infoCrc = 0;
+    uint16_t      pathCrc = 0;
     uint8_t       control = 0;
+    uint8_t       repeaterCount = 0;
     uint32_t      seenMs  = 0;
   };
 
@@ -176,8 +179,9 @@ class Tnc {
   bool maybeDigipeat(const ax25::Frame& frame);
   int  findNextRepeater(const ax25::Frame& frame) const;
   bool matchesDigiAddress(const ax25::Address& address) const;
-  bool digiSeen(const ax25::Frame& frame, uint16_t infoCrc) const;
-  void rememberDigi(const ax25::Frame& frame, uint16_t infoCrc);
+  uint16_t digiPathCrc(const ax25::Frame& frame) const;
+  bool digiSeen(const ax25::Frame& frame, uint16_t infoCrc, uint16_t pathCrc) const;
+  void rememberDigi(const ax25::Frame& frame, uint16_t infoCrc, uint16_t pathCrc);
   void printDigipeater() const;
 
   // Mheard
@@ -258,6 +262,8 @@ class Tnc {
   uint32_t netromBroadcasts_  = 0;
   uint32_t netromRoutesHeard_ = 0;
   uint32_t digiTx_          = 0;
+  uint32_t digiUiTx_        = 0;
+  uint32_t digiConnTx_      = 0;
   uint32_t digiDupes_       = 0;
   uint32_t digiDrops_       = 0;
 

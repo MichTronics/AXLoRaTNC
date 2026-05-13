@@ -118,11 +118,13 @@ The table stores first-heard and last-heard times formatted as `HH:MM:SS` uptime
 
 ```text
 digi on / off
+digi mode ui            → relay only UI frames (default)
+digi mode all           → relay UI and connected-mode AX.25 frames
 digialias WIDE1-1         → set secondary alias (callsign or alias matched)
 digialias off
 ```
 
-The digipeater relays AX.25 UI frames. It matches the first unrepeated repeater address against the node callsign or configured alias, sets the H-bit, recalculates FCS, and retransmits. A 30-second duplicate cache (keyed on source + destination + control + info CRC) suppresses loops.
+The digipeater matches the first unrepeated repeater address against the node callsign or configured alias, sets the H-bit, recalculates FCS, and retransmits. The default `ui` mode relays only AX.25 UI frames for APRS/beacons. `all` mode also relays connected-mode AX.25 frames, allowing connections through a LoRa digi path. A 30-second duplicate cache suppresses UI-frame loops; connected-mode retransmissions are intentionally not cached because repeated I-frames can be part of normal AX.25 recovery.
 
 ### NET/ROM node
 
@@ -318,7 +320,7 @@ RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` has n
 - CSMA p-persistent listen-before-talk (TxDelay, Persistence, SlotTime, FullDuplex from KISS)
 - Interrupt-driven RX on SX1262 DIO1 pin
 - Duty-cycle enforcement (configurable ppm limit)
-- UI-frame digipeater with H-bit update and 30-second duplicate cache
+- UI or full AX.25 digipeater with H-bit update and UI-frame duplicate cache
 - UI beacon with configurable destination, path, interval, and text
 - APRS position beacon shortcut (`beacon aprs lat lon sym comment`)
 - APRS frame detection and decode on receive

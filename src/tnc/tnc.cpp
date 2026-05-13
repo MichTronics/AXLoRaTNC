@@ -29,6 +29,11 @@ bool textToAddress(const char* text, ax25::Address& out) {
   return text != nullptr && text[0] != '\0' && ax25::parseAddress(text, out);
 }
 
+bool isUiFrame(const ax25::Frame& frame) {
+  return ax25::kind(frame.control) == ax25::FrameKind::U &&
+         ax25::uType(frame.control) == ax25::UFrameType::UI;
+}
+
 static size_t formatMonitorFrame(const ax25::Frame& frame, float rssi, float snr,
                                  char* buf, size_t cap) {
   size_t pos = 0;
@@ -405,7 +410,7 @@ void Tnc::handleConsoleLine(char* line) {
     Serial.println("          ax25 connect [ch] <CALL> disconnect [ch]");
     Serial.println("          send [ch] <msg> sendui <DEST> <msg>");
     Serial.println("          beacon [on|off|now|text|dest|interval|path]");
-    Serial.println("          mheard [clear] digi [on|off] digialias [CALL|off]");
+    Serial.println("          mheard [clear] digi [on|off|mode ui|all] digialias [CALL|off]");
     Serial.println("          node [on|off|alias|ident|interval|broadcast] nodes routes");
 
   } else if (strcmp(cmd, "info") == 0) {
@@ -725,7 +730,17 @@ void Tnc::handleConsoleLine(char* line) {
     if (!mode) { printDigipeater(); }
     else if (strcmp(mode, "on") == 0)  { digi_.enabled = true;  saveSettings(); printDigipeater(); }
     else if (strcmp(mode, "off") == 0) { digi_.enabled = false; saveSettings(); printDigipeater(); }
-    else Serial.println("usage: digi [on|off]");
+    else if (strcmp(mode, "mode") == 0) {
+      char* value = strtok(nullptr, " ");
+      if (value && strcmp(value, "ui") == 0) {
+        digi_.allFrames = false; saveSettings(); printDigipeater();
+      } else if (value && strcmp(value, "all") == 0) {
+        digi_.allFrames = true; saveSettings(); printDigipeater();
+      } else {
+        Serial.println("usage: digi mode <ui|all>");
+      }
+    }
+    else Serial.println("usage: digi [on|off|mode ui|all]");
 
   } else if (strcmp(cmd, "digialias") == 0) {
     char* value = strtok(nullptr, " ");
@@ -828,9 +843,11 @@ void Tnc::printStats() const {
                 static_cast<unsigned long>(rawTxDeferred_),
                 static_cast<unsigned long>(rawTxQueueDrops_),
                 kissParams_.txDelay, kissParams_.persistence, kissParams_.slotTime, kissParams_.fullDuplex);
-  Serial.printf("digi enabled=%u tx=%lu dupes=%lu drops=%lu\n",
-                digi_.enabled,
+  Serial.printf("digi enabled=%u mode=%s tx=%lu ui_tx=%lu conn_tx=%lu dupes=%lu drops=%lu\n",
+                digi_.enabled, digi_.allFrames ? "all" : "ui",
                 static_cast<unsigned long>(digiTx_),
+                static_cast<unsigned long>(digiUiTx_),
+                static_cast<unsigned long>(digiConnTx_),
                 static_cast<unsigned long>(digiDupes_),
                 static_cast<unsigned long>(digiDrops_));
   Serial.printf("beacon enabled=%u tx=%lu drops=%lu interval_s=%lu\n",
@@ -1340,15 +1357,19 @@ void Tnc::handleQuietEscape(uint8_t byte) {
 // ---------------------------------------------------------------------------
 
 bool Tnc::maybeDigipeat(const ax25::Frame& frame) {
-  if (!digi_.enabled || ax25::kind(frame.control) != ax25::FrameKind::U ||
-      ax25::uType(frame.control) != ax25::UFrameType::UI) return false;
+  if (!digi_.enabled) return false;
+  const bool uiFrame = isUiFrame(frame);
+  if (!uiFrame && !digi_.allFrames) return false;
   if (ax25::addressEquals(frame.source, local_)) return false;
   const int repeaterIndex = findNextRepeater(frame);
   if (repeaterIndex < 0) return false;
 
-  const uint16_t infoCrc = axlora::util::crc16Ccitt(frame.info, frame.infoLen);
-  if (digiSeen(frame, infoCrc)) { ++digiDupes_; return false; }
-  rememberDigi(frame, infoCrc);
+  if (uiFrame) {
+    const uint16_t infoCrc = axlora::util::crc16Ccitt(frame.info, frame.infoLen);
+    const uint16_t pathCrc = digiPathCrc(frame);
+    if (digiSeen(frame, infoCrc, pathCrc)) { ++digiDupes_; return false; }
+    rememberDigi(frame, infoCrc, pathCrc);
+  }
 
   ax25::Frame repeated = frame;
   repeated.repeaters[repeaterIndex].repeated = true;
@@ -1357,6 +1378,8 @@ bool Tnc::maybeDigipeat(const ax25::Frame& frame) {
   if (!ax25::encodeFrame(repeated, bytes, sizeof(bytes), len, true)) { ++digiDrops_; return false; }
   if (!transmitRaw(bytes, len)) { ++digiDrops_; return false; }
   ++digiTx_;
+  if (uiFrame) ++digiUiTx_;
+  else ++digiConnTx_;
   return true;
 }
 
@@ -1374,11 +1397,23 @@ bool Tnc::matchesDigiAddress(const ax25::Address& address) const {
          (digi_.hasAlias && ax25::addressEquals(address, digi_.alias));
 }
 
-bool Tnc::digiSeen(const ax25::Frame& frame, uint16_t infoCrc) const {
+uint16_t Tnc::digiPathCrc(const ax25::Frame& frame) const {
+  uint8_t raw[ax25::MAX_REPEATERS * 8]{};
+  size_t p = 0;
+  for (uint8_t i = 0; i < frame.repeaterCount && p + 8 <= sizeof(raw); ++i) {
+    if (!ax25::encodeAddress(frame.repeaters[i], i == frame.repeaterCount - 1, &raw[p])) break;
+    p += 7;
+    raw[p++] = frame.repeaters[i].repeated ? 1 : 0;
+  }
+  return axlora::util::crc16Ccitt(raw, p);
+}
+
+bool Tnc::digiSeen(const ax25::Frame& frame, uint16_t infoCrc, uint16_t pathCrc) const {
   const uint32_t now = axlora::util::nowMs();
   for (const DigiCacheEntry& entry : digiCache_) {
     if (entry.active && !axlora::util::elapsed(now, entry.seenMs, 30000) &&
         entry.control == frame.control && entry.infoCrc == infoCrc &&
+        entry.pathCrc == pathCrc && entry.repeaterCount == frame.repeaterCount &&
         ax25::addressEquals(entry.source, frame.source) &&
         ax25::addressEquals(entry.destination, frame.destination)) {
       return true;
@@ -1387,7 +1422,7 @@ bool Tnc::digiSeen(const ax25::Frame& frame, uint16_t infoCrc) const {
   return false;
 }
 
-void Tnc::rememberDigi(const ax25::Frame& frame, uint16_t infoCrc) {
+void Tnc::rememberDigi(const ax25::Frame& frame, uint16_t infoCrc, uint16_t pathCrc) {
   const uint32_t now = axlora::util::nowMs();
   DigiCacheEntry* slot = nullptr;
   for (DigiCacheEntry& entry : digiCache_) {
@@ -1401,6 +1436,8 @@ void Tnc::rememberDigi(const ax25::Frame& frame, uint16_t infoCrc) {
   slot->destination = frame.destination;
   slot->control     = frame.control;
   slot->infoCrc     = infoCrc;
+  slot->pathCrc     = pathCrc;
+  slot->repeaterCount = frame.repeaterCount;
   slot->seenMs      = now;
 }
 
@@ -1408,9 +1445,11 @@ void Tnc::printDigipeater() const {
   char alias[12]{};
   if (digi_.hasAlias) ax25::formatAddress(digi_.alias, alias, sizeof(alias));
   else strcpy(alias, "off");
-  Serial.printf("digipeat=%s alias=%s tx=%lu dupes=%lu drops=%lu\n",
-                digi_.enabled ? "on" : "off", alias,
+  Serial.printf("digipeat=%s mode=%s alias=%s tx=%lu ui_tx=%lu conn_tx=%lu dupes=%lu drops=%lu\n",
+                digi_.enabled ? "on" : "off", digi_.allFrames ? "all" : "ui", alias,
                 static_cast<unsigned long>(digiTx_),
+                static_cast<unsigned long>(digiUiTx_),
+                static_cast<unsigned long>(digiConnTx_),
                 static_cast<unsigned long>(digiDupes_),
                 static_cast<unsigned long>(digiDrops_));
 }
@@ -1684,6 +1723,7 @@ void Tnc::loadSettings() {
         prefs.getUChar("mode", static_cast<uint8_t>(SerialMode::Console)));
     digi_.enabled  = prefs.getBool("digi_en",       digi_.enabled);
     digi_.hasAlias = prefs.getBool("digi_alias_en",  digi_.hasAlias);
+    digi_.allFrames = prefs.getBool("digi_all",      digi_.allFrames);
     char addr[16]{};
     prefs.getString("digi_alias", addr, sizeof(addr));
     textToAddress(addr, digi_.alias);
@@ -1719,6 +1759,7 @@ void Tnc::saveSettings() {
   if (!prefs.begin("axloratnc", false)) return;
   prefs.putBool("digi_en",      digi_.enabled);
   prefs.putBool("digi_alias_en", digi_.hasAlias);
+  prefs.putBool("digi_all",      digi_.allFrames);
   char text[16]{};
   addressToText(digi_.alias, text, sizeof(text));
   prefs.putString("digi_alias", text);
