@@ -66,10 +66,12 @@ bool encodeFrame(const Frame& frame, uint8_t* out, size_t outCap, size_t& outLen
   if (!encodeAddress(frame.destination, false, &raw[p])) {
     return false;
   }
+  if (frame.command) raw[p + 6] |= 0x80;  // C bit in destination SSID byte
   p += 7;
   if (!encodeAddress(frame.source, frame.repeaterCount == 0, &raw[p])) {
     return false;
   }
+  if (!frame.command) raw[p + 6] |= 0x80;  // R bit in source SSID byte
   p += 7;
   for (uint8_t i = 0; i < frame.repeaterCount; ++i) {
     if (!encodeAddress(frame.repeaters[i], i == frame.repeaterCount - 1, &raw[p])) {
@@ -105,6 +107,7 @@ bool decodeFrame(const uint8_t* data, size_t len, Frame& out, bool expectFcs) {
   if (!decodeAddress(&data[p], out.destination, last)) {
     return false;
   }
+  out.command = (data[p + 6] & 0x80) != 0;  // C bit in destination SSID byte
   p += 7;
   if (!decodeAddress(&data[p], out.source, last)) {
     return false;

@@ -189,12 +189,21 @@ class Tnc {
   // Settings
   void loadSettings();
   void saveSettings();
+  void saveRadioConfig();
+  void applyRadioConfig();
   void saveSerialMode(SerialMode mode);
   void setSerialMode(SerialMode mode);
   const char* serialModeName() const;
 
+  // CSMA
+  bool isChannelBusy() const;
+
   // ---- Members ----
-  ax25::Address  local_{};
+  ax25::Address       local_{};
+  char                savedCallsign_[12]{};
+  radio::RadioConfig  radioConfig_{};
+  bool                radioConfigApplied_ = false;
+  uint32_t            lastRxMs_           = 0;
   ChannelCtx     channelCtx_[CHANNEL_COUNT]{};
   ChannelState   channels_[CHANNEL_COUNT]{};
 
@@ -222,6 +231,7 @@ class Tnc {
   NetromConfig     netrom_{};
   NetromRoute      netromRoutes_[20]{};
 
+  bool     monitorEnabled_   = false;
   uint32_t rawTx_           = 0;
   uint32_t rawRx_           = 0;
   uint32_t beaconTx_        = 0;

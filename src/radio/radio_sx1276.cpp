@@ -90,6 +90,21 @@ class Sx1276Driver final : public Driver {
     return radio_.setOutputPower(powerDbm) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
   }
 
+  Result setSpreadingFactor(uint8_t sf) override {
+    return radio_.setSpreadingFactor(sf) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
+  }
+
+  Result setBandwidth(float bandwidthKhz) override {
+    const int16_t s = radio_.setBandwidth(bandwidthKhz);
+    if (s != RADIOLIB_ERR_NONE) return Result::HardwareError;
+    radio_.startReceive();
+    return Result::Ok;
+  }
+
+  Result setCodingRate(uint8_t cr) override {
+    return radio_.setCodingRate(cr) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
+  }
+
   float getRSSI() override { return radio_.getRSSI(); }
   float getSNR() override { return radio_.getSNR(); }
   void sleep() override { radio_.sleep(); }

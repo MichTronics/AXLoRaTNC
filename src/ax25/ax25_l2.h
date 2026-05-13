@@ -102,7 +102,9 @@ class LinkLayer {
   static constexpr uint8_t WINDOW_SIZE = 4;
   WindowSlot window_[WINDOW_SIZE]{};
   Timer t1_;
+  Timer t2_;
   Timer t3_;
+  bool  t2PendingAck_ = false;
   axlora::util::RingBuffer<QueuedInfo, 6> txQueue_;
   L2Stats stats_{};
 };

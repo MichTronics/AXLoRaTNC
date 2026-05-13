@@ -4,6 +4,16 @@
 #include <string.h>
 #include <stdio.h>
 
+namespace {
+void formatUptime(uint32_t ms, char* buf, size_t cap) {
+  const uint32_t s = ms / 1000;
+  snprintf(buf, cap, "%02lu:%02lu:%02lu",
+           static_cast<unsigned long>(s / 3600),
+           static_cast<unsigned long>((s % 3600) / 60),
+           static_cast<unsigned long>(s % 60));
+}
+}
+
 namespace axlora::tnc {
 
 static void copyField(char* dst, size_t cap, const char* src) {
@@ -50,6 +60,8 @@ void Mailbox::load() {
     prefs.getString(key, messages_[i].body, sizeof(messages_[i].body));
     snprintf(key, sizeof(key), "r%u", static_cast<unsigned>(i));
     messages_[i].read = prefs.getBool(key, false);
+    snprintf(key, sizeof(key), "m%u", static_cast<unsigned>(i));
+    messages_[i].postedMs = prefs.getULong(key, 0);
   }
   prefs.end();
 }
@@ -71,6 +83,8 @@ void Mailbox::saveSlot(uint8_t index) {
     prefs.putString(key, m.body);
     snprintf(key, sizeof(key), "r%u", static_cast<unsigned>(index));
     prefs.putBool(key, m.read);
+    snprintf(key, sizeof(key), "m%u", static_cast<unsigned>(index));
+    prefs.putULong(key, m.postedMs);
   }
   prefs.end();
 }
@@ -82,8 +96,9 @@ bool Mailbox::post(const char* from, const char* to, const char* body) {
     if (!messages_[i].active) { slot = i; break; }
   }
   if (slot == MAX_MESSAGES) return false;
-  messages_[slot].active = true;
-  messages_[slot].read   = false;
+  messages_[slot].active   = true;
+  messages_[slot].read     = false;
+  messages_[slot].postedMs = static_cast<uint32_t>(millis());
   copyField(messages_[slot].from, sizeof(messages_[slot].from), from);
   copyField(messages_[slot].to,   sizeof(messages_[slot].to),   to);
   copyField(messages_[slot].body, sizeof(messages_[slot].body), body);
@@ -122,9 +137,15 @@ size_t Mailbox::list(char* buf, size_t cap, const char* toCallsign) const {
     const Message& m = messages_[i];
     if (!m.active) continue;
     if (toCallsign != nullptr && !callsignMatch(m.to, toCallsign)) continue;
-    char row[64]{};
-    snprintf(row, sizeof(row), "%2u %-10s->%-10s %s\r",
-             static_cast<unsigned>(i + 1), m.from, m.to,
+    char ts[10]{};
+    if (m.postedMs > 0) {
+      formatUptime(m.postedMs, ts, sizeof(ts));
+    } else {
+      strncpy(ts, "--:--:--", sizeof(ts) - 1);
+    }
+    char row[72]{};
+    snprintf(row, sizeof(row), "%2u %s %-10s->%-10s %s\r",
+             static_cast<unsigned>(i + 1), ts, m.from, m.to,
              m.read ? "(read)" : "(new)");
     append(row);
     any = true;

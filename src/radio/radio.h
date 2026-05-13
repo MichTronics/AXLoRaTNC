@@ -7,27 +7,35 @@
 namespace axlora::radio {
 
 enum class Result : int8_t {
-  Ok = 0,
-  Busy = 1,
-  NoPacket = 2,
-  Invalid = -1,
+  Ok          =  0,
+  Busy        =  1,
+  NoPacket    =  2,
+  Invalid     = -1,
   HardwareError = -2,
-  TooLarge = -3,
+  TooLarge    = -3,
 };
 
 struct RxPacket {
   uint8_t data[MAX_PACKET_BYTES]{};
-  size_t len = 0;
-  float rssi = 0.0f;
-  float snr = 0.0f;
+  size_t  len  = 0;
+  float   rssi = 0.0f;
+  float   snr  = 0.0f;
 };
 
 struct Stats {
-  uint32_t txOk = 0;
-  uint32_t txFail = 0;
-  uint32_t rxOk = 0;
-  uint32_t rxFail = 0;
+  uint32_t txOk      = 0;
+  uint32_t txFail    = 0;
+  uint32_t rxOk      = 0;
+  uint32_t rxFail    = 0;
   uint32_t dutyDrops = 0;
+};
+
+struct RadioConfig {
+  float   frequencyMHz    = variant::DEFAULT_FREQUENCY_MHZ;
+  float   bandwidthKhz    = variant::DEFAULT_BANDWIDTH_KHZ;
+  uint8_t spreadingFactor = variant::DEFAULT_SPREADING_FACTOR;
+  uint8_t codingRate      = variant::DEFAULT_CODING_RATE;
+  int8_t  powerDbm        = variant::DEFAULT_TX_POWER_DBM;
 };
 
 class Driver {
@@ -38,15 +46,17 @@ class Driver {
   virtual Result receive(RxPacket& packet) = 0;
   virtual Result setFrequency(float frequencyMHz) = 0;
   virtual Result setPower(int8_t powerDbm) = 0;
-  virtual float getRSSI() = 0;
-  virtual float getSNR() = 0;
-  virtual void sleep() = 0;
-  virtual void standby() = 0;
+  virtual Result setSpreadingFactor(uint8_t sf) = 0;
+  virtual Result setBandwidth(float bandwidthKhz) = 0;
+  virtual Result setCodingRate(uint8_t cr) = 0;
+  virtual float  getRSSI() = 0;
+  virtual float  getSNR() = 0;
+  virtual void   sleep() = 0;
+  virtual void   standby() = 0;
 };
 
-Driver& driver();
-Stats& stats();
+Driver&     driver();
+Stats&      stats();
 const char* resultName(Result result);
 
 }
-

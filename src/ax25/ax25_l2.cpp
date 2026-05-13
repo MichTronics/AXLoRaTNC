@@ -27,6 +27,8 @@ void LinkLayer::loop() {
     ++retryCount_;
     ++stats_.retries;
     if (state_ == LinkState::Connected && hasOutstanding()) {
+      t2_.stop();
+      t2PendingAck_ = false;
       setState(LinkState::Recovery);
       sendSupervisory(SFrameType::RR, true);
     } else if (state_ == LinkState::Recovery) {
@@ -37,6 +39,10 @@ void LinkLayer::loop() {
       sendUnnumbered(UFrameType::DISC);
     }
     t1_.start(config_.t1Ms);
+  }
+  if (state_ == LinkState::Connected && t2_.expired()) {
+    t2PendingAck_ = false;
+    sendSupervisory(SFrameType::RR);  // Deferred ack
   }
   if (state_ == LinkState::Connected && t3_.expired()) {
     sendSupervisory(SFrameType::RR);
@@ -69,6 +75,8 @@ bool LinkLayer::connectTo(const Address& destination) {
   vr_ = 0;
   retryCount_ = 0;
   peerBusy_ = false;
+  t2_.stop();
+  t2PendingAck_ = false;
   txQueue_.clear();
   setState(LinkState::Connecting);
   return sendUnnumbered(UFrameType::SABM);
@@ -80,6 +88,8 @@ bool LinkLayer::disconnect() {
   }
   retryCount_ = 0;
   txQueue_.clear();
+  t2_.stop();
+  t2PendingAck_ = false;
   setState(LinkState::Disconnecting);
   return sendUnnumbered(UFrameType::DISC);
 }
@@ -107,9 +117,13 @@ bool LinkLayer::sendIFrame(const uint8_t* data, size_t len) {
   if (state_ != LinkState::Connected || windowFull() || peerBusy_ || data == nullptr || len == 0) {
     return false;
   }
+  // Cancel T2: NR in this I-frame piggybacks the ack
+  t2PendingAck_ = false;
+  t2_.stop();
   Frame frame{};
   frame.destination = peer_;
   frame.source = config_.local;
+  frame.command = true;   // I frames are always commands
   frame.control = makeI(vs_, vr_, false);
   frame.pid = PID_NO_LAYER3;
   frame.infoLen = len > MAX_INFO_LEN ? MAX_INFO_LEN : len;
@@ -236,6 +250,7 @@ bool LinkLayer::sendSupervisory(SFrameType type, bool poll) {
   Frame frame{};
   frame.destination = peer_;
   frame.source = config_.local;
+  frame.command = poll;   // poll=true → command, poll=false → response
   frame.control = makeS(type, vr_, poll);
   return transmit(frame, false);
 }
@@ -244,6 +259,7 @@ bool LinkLayer::sendUnnumbered(UFrameType type) {
   Frame frame{};
   frame.destination = peer_;
   frame.source = config_.local;
+  frame.command = (type == UFrameType::SABM || type == UFrameType::DISC || type == UFrameType::UI);
   frame.control = makeU(type, true);
   const bool ok = transmit(frame, false);
   if (ok && (type == UFrameType::SABM || type == UFrameType::DISC)) {
@@ -271,7 +287,11 @@ void LinkLayer::handleI(const Frame& frame) {
     if (data_ != nullptr) {
       data_(frame.info, frame.infoLen, true, ctx_);
     }
-    sendSupervisory(SFrameType::RR);
+    // T2: defer RR ack to allow piggybacking on an outgoing I-frame
+    if (!t2PendingAck_) {
+      t2PendingAck_ = true;
+      t2_.start(config_.t2Ms);
+    }
   } else {
     LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending REJ", ns(frame.control), vr_);
     ++stats_.rejTx;
@@ -352,6 +372,8 @@ void LinkLayer::handleU(const Frame& frame) {
     va_ = 0;
     vr_ = 0;
     peerBusy_ = false;
+    t2_.stop();
+    t2PendingAck_ = false;
     clearWindow();
     txQueue_.clear();
     t1_.stop();
@@ -369,6 +391,8 @@ void LinkLayer::handleU(const Frame& frame) {
       fillWindow();
     } else if (state_ == LinkState::Disconnecting) {
       t1_.stop();
+      t2_.stop();
+      t2PendingAck_ = false;
       clearWindow();
       txQueue_.clear();
       setState(LinkState::Disconnected);
@@ -388,6 +412,8 @@ void LinkLayer::handleU(const Frame& frame) {
     clearWindow();
     txQueue_.clear();
     t1_.stop();
+    t2_.stop();
+    t2PendingAck_ = false;
     setState(LinkState::Disconnected);
   }
 }

@@ -13,11 +13,12 @@ class Mailbox {
   static constexpr uint8_t MAX_BODY     = 200;
 
   struct Message {
-    char    from[MAX_FROM + 1]{};
-    char    to[MAX_TO + 1]{};
-    char    body[MAX_BODY + 1]{};
-    bool    read   = false;
-    bool    active = false;
+    char     from[MAX_FROM + 1]{};
+    char     to[MAX_TO + 1]{};
+    char     body[MAX_BODY + 1]{};
+    uint32_t postedMs = 0;   // millis() at post time (0 = unknown / pre-boot)
+    bool     read   = false;
+    bool     active = false;
   };
 
   void    begin();

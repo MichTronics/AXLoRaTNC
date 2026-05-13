@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <stdlib.h>
 #include <string.h>
+#include "aprs/aprs.h"
 #include "ax25/ax25_fcs.h"
 #include "ax25/ax25_frame.h"
 #include "util/crc.h"
@@ -12,12 +13,63 @@
 namespace axlora::tnc {
 namespace {
 
+static void formatUptime(uint32_t ms, char* buf, size_t cap) {
+  const uint32_t s = ms / 1000;
+  snprintf(buf, cap, "%02lu:%02lu:%02lu",
+           static_cast<unsigned long>(s / 3600),
+           static_cast<unsigned long>((s % 3600) / 60),
+           static_cast<unsigned long>(s % 60));
+}
+
 void addressToText(const ax25::Address& address, char* out, size_t outCap) {
   ax25::formatAddress(address, out, outCap);
 }
 
 bool textToAddress(const char* text, ax25::Address& out) {
   return text != nullptr && text[0] != '\0' && ax25::parseAddress(text, out);
+}
+
+static size_t formatMonitorFrame(const ax25::Frame& frame, float rssi, float snr,
+                                 char* buf, size_t cap) {
+  size_t pos = 0;
+  auto app = [&](const char* s) {
+    for (; *s != '\0' && pos + 1 < cap; ++s) buf[pos++] = *s;
+  };
+  char src[12]{}, dst[12]{};
+  ax25::formatAddress(frame.source,      src, sizeof(src));
+  ax25::formatAddress(frame.destination, dst, sizeof(dst));
+  app("FM "); app(src); app(" TO "); app(dst);
+  for (uint8_t i = 0; i < frame.repeaterCount; ++i) {
+    char rep[12]{};
+    ax25::formatAddress(frame.repeaters[i], rep, sizeof(rep));
+    app(i == 0 ? " VIA " : ","); app(rep);
+  }
+  char meta[40]{};
+  switch (ax25::kind(frame.control)) {
+    case ax25::FrameKind::I:
+      snprintf(meta, sizeof(meta), " <I S%u R%u>", ax25::ns(frame.control), ax25::nr(frame.control));
+      break;
+    case ax25::FrameKind::S:
+      snprintf(meta, sizeof(meta), " <S%u R%u>",
+               static_cast<unsigned>((frame.control >> 2) & 0x03), ax25::nr(frame.control));
+      break;
+    default:
+      snprintf(meta, sizeof(meta), " <U>");
+      break;
+  }
+  app(meta);
+  char rssiStr[24]{};
+  snprintf(rssiStr, sizeof(rssiStr), " RSSI=%.0f SNR=%.0f",
+           static_cast<double>(rssi), static_cast<double>(snr));
+  app(rssiStr);
+  if (frame.infoLen > 0) {
+    app(":");
+    for (size_t i = 0; i < frame.infoLen && pos + 1 < cap; ++i) {
+      buf[pos++] = static_cast<char>(frame.info[i]);
+    }
+  }
+  if (pos < cap) buf[pos] = '\0';
+  return pos;
 }
 
 
@@ -30,7 +82,9 @@ bool textToAddress(const char* text, ax25::Address& out) {
 void Tnc::begin(const char* callsign) {
   loadSettings();
   mailbox_.begin();
-  if (!ax25::parseAddress(callsign, local_)) {
+  // Prefer NVS callsign over compile-time default
+  const char* cs = (savedCallsign_[0] != '\0') ? savedCallsign_ : callsign;
+  if (!ax25::parseAddress(cs, local_)) {
     ax25::parseAddress("N0CALL", local_);
   }
   if (beacon_.destination.callsign[0] == '\0') {
@@ -62,6 +116,10 @@ void Tnc::loop(bool radioReady) {
   }
   checkLinkStatusEvents();
   if (radioReady) {
+    if (!radioConfigApplied_) {
+      applyRadioConfig();
+      radioConfigApplied_ = true;
+    }
     serviceBeacon(radioReady);
     serviceNetrom(radioReady);
     serviceRadio();
@@ -72,7 +130,28 @@ void Tnc::loop(bool radioReady) {
 // Radio TX / RX
 // ---------------------------------------------------------------------------
 
+bool Tnc::isChannelBusy() const {
+  if (lastRxMs_ == 0 || kissParams_.fullDuplex != 0) return false;
+  const uint32_t windowMs = static_cast<uint32_t>(kissParams_.slotTime) * 10;
+  return !axlora::util::elapsed(axlora::util::nowMs(), lastRxMs_, windowMs < 100 ? 100 : windowMs);
+}
+
 bool Tnc::transmitRaw(const uint8_t* data, size_t len) {
+  if (kissParams_.fullDuplex == 0) {
+    // TxDelay
+    if (kissParams_.txDelay > 0) {
+      delay(static_cast<uint32_t>(kissParams_.txDelay) * 10);
+    }
+    // p-persistent CSMA: up to 8 attempts
+    const uint32_t slotMs = static_cast<uint32_t>(kissParams_.slotTime) * 10;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+      if (!isChannelBusy() &&
+          static_cast<uint8_t>(random(256)) <= kissParams_.persistence) {
+        break;
+      }
+      delay(slotMs < 10 ? 10 : slotMs);
+    }
+  }
   const radio::Result result = radio::driver().send(data, len);
   if (result == radio::Result::Ok) {
     ++rawTx_;
@@ -97,12 +176,12 @@ void Tnc::dataCallback(const uint8_t* data, size_t len, bool connected, void* ct
     self->enqueueDedEvent(channel, connected ? 7 : 6, data, len);
     return;
   }
-  if (connected && self->netrom_.enabled) {
+  if (connected) {
     self->processNodeInput(chIdx, data, len);
     return;
   }
   if (axlora::util::logEnabled()) {
-    Serial.printf("[%s ch%u] ", connected ? "AX25/I" : "AX25/UI", channel);
+    Serial.printf("[AX25/UI ch%u] ", channel);
     for (size_t i = 0; i < len; ++i) Serial.write(data[i]);
     Serial.println();
   }
@@ -136,14 +215,31 @@ int Tnc::findChannelForIncoming(const ax25::Frame& frame) const {
 void Tnc::serviceRadio() {
   radio::RxPacket rx{};
   if (radio::driver().receive(rx) != radio::Result::Ok) return;
+  lastRxMs_ = axlora::util::nowMs();
   ++rawRx_;
   if (rx.len >= 2 && ax25::checkFcs(rx.data, rx.len)) {
     emitKissData(rx.data, rx.len - 2);
     ax25::Frame frame{};
     if (ax25::decodeFrame(rx.data, rx.len, frame, true)) {
+      // Detect APRS (UI, PID=0xF0) and log parsed content
+      if (ax25::kind(frame.control) == ax25::FrameKind::U &&
+          ax25::uType(frame.control) == ax25::UFrameType::UI &&
+          frame.pid == ax25::PID_NO_LAYER3 && frame.infoLen > 0) {
+        char aprsSum[80]{};
+        if (aprs::parse(frame.info, frame.infoLen, aprsSum, sizeof(aprsSum))) {
+          char src[12]{};
+          ax25::formatAddress(frame.source, src, sizeof(src));
+          LOG_INFO("APRS %s: %s", src, aprsSum);
+        }
+      }
       observeHeard(frame, rx.rssi, rx.snr);
       observeNetrom(frame);
       maybeDigipeat(frame);
+      if (monitorEnabled_ && serialMode_ == SerialMode::Wa8ded) {
+        char monBuf[300]{};
+        const size_t monLen = formatMonitorFrame(frame, rx.rssi, rx.snr, monBuf, sizeof(monBuf));
+        enqueueDedEvent(0, 5, reinterpret_cast<const uint8_t*>(monBuf), monLen);
+      }
       const int chIdx = findChannelForIncoming(frame);
       if (chIdx >= 0) {
         channels_[chIdx].link.receive(rx.data, rx.len);
@@ -167,6 +263,13 @@ void Tnc::serviceBeacon(bool radioReady) {
 void Tnc::serviceNetrom(bool radioReady) {
   if (!radioReady || !netrom_.enabled) return;
   const uint32_t now = axlora::util::nowMs();
+  // Expire routes not heard within 6 broadcast intervals (NET/ROM obsolescence)
+  const uint32_t expiryMs = netrom_.broadcastIntervalMs * 6;
+  for (NetromRoute& route : netromRoutes_) {
+    if (route.active && axlora::util::elapsed(now, route.lastHeardMs, expiryMs)) {
+      route.active = false;
+    }
+  }
   if (netrom_.lastBroadcastMs != 0 &&
       !axlora::util::elapsed(now, netrom_.lastBroadcastMs, netrom_.broadcastIntervalMs)) return;
   netrom_.lastBroadcastMs = now;
@@ -249,9 +352,13 @@ void Tnc::handleConsoleLine(char* line) {
   if (cmd == nullptr) return;
 
   if (strcmp(cmd, "help") == 0) {
-    Serial.println("Commands: help info mode radio ax25 node nodes routes beacon mheard digi");
-    Serial.println("          connect [ch] <CALL> disconnect [ch] sendui <DEST> <msg>");
-    Serial.println("          send [ch] <msg> bbs stats");
+    Serial.println("Commands: help info callsign mode stats bbs");
+    Serial.println("          radio [freq|sf|bw|cr|power] [val]");
+    Serial.println("          ax25 connect [ch] <CALL> disconnect [ch]");
+    Serial.println("          send [ch] <msg> sendui <DEST> <msg>");
+    Serial.println("          beacon [on|off|now|text|dest|interval|path]");
+    Serial.println("          mheard [clear] digi [on|off] digialias [CALL|off]");
+    Serial.println("          node [on|off|alias|ident|interval|broadcast] nodes routes");
 
   } else if (strcmp(cmd, "info") == 0) {
     printInfo();
@@ -273,10 +380,93 @@ void Tnc::handleConsoleLine(char* line) {
       Serial.println("usage: mode [console|kiss|ded]");
     }
 
+  } else if (strcmp(cmd, "callsign") == 0) {
+    char* cs = strtok(nullptr, " ");
+    char addrStr[12]{};
+    if (cs == nullptr) {
+      ax25::formatAddress(local_, addrStr, sizeof(addrStr));
+      Serial.printf("callsign=%s\n", addrStr);
+    } else {
+      ax25::Address newAddr{};
+      if (!ax25::parseAddress(cs, newAddr)) {
+        Serial.println("invalid callsign");
+      } else {
+        local_ = newAddr;
+        ax25::L2Config cfg{};
+        cfg.local = local_;
+        for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
+          channels_[i].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[i]);
+        }
+        ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
+        Preferences prefs;
+        if (prefs.begin("axloratnc", false)) {
+          prefs.putString("callsign", savedCallsign_);
+          prefs.end();
+        }
+        Serial.printf("callsign=%s\n", savedCallsign_);
+      }
+    }
+
   } else if (strcmp(cmd, "radio") == 0) {
-    Serial.printf("RSSI=%.1f SNR=%.1f\n",
-                  static_cast<double>(radio::driver().getRSSI()),
-                  static_cast<double>(radio::driver().getSNR()));
+    char* sub = strtok(nullptr, " ");
+    if (sub == nullptr) {
+      Serial.printf("freq=%.3f bw=%.1f sf=%u cr=4/%u pwr=%d RSSI=%.1f SNR=%.1f\n",
+                    static_cast<double>(radioConfig_.frequencyMHz),
+                    static_cast<double>(radioConfig_.bandwidthKhz),
+                    radioConfig_.spreadingFactor, radioConfig_.codingRate,
+                    radioConfig_.powerDbm,
+                    static_cast<double>(radio::driver().getRSSI()),
+                    static_cast<double>(radio::driver().getSNR()));
+    } else if (strcmp(sub, "freq") == 0) {
+      char* val = strtok(nullptr, " ");
+      if (!val) { Serial.println("usage: radio freq <MHz>"); }
+      else {
+        radioConfig_.frequencyMHz = static_cast<float>(atof(val));
+        radio::driver().setFrequency(radioConfig_.frequencyMHz);
+        saveRadioConfig();
+        Serial.printf("freq=%.3f MHz\n", static_cast<double>(radioConfig_.frequencyMHz));
+      }
+    } else if (strcmp(sub, "sf") == 0) {
+      char* val = strtok(nullptr, " ");
+      const long v = val ? atol(val) : 0;
+      if (v < 6 || v > 12) { Serial.println("usage: radio sf <6-12>"); }
+      else {
+        radioConfig_.spreadingFactor = static_cast<uint8_t>(v);
+        radio::driver().setSpreadingFactor(radioConfig_.spreadingFactor);
+        saveRadioConfig();
+        Serial.printf("sf=%u\n", radioConfig_.spreadingFactor);
+      }
+    } else if (strcmp(sub, "bw") == 0) {
+      char* val = strtok(nullptr, " ");
+      if (!val) { Serial.println("usage: radio bw <kHz>"); }
+      else {
+        radioConfig_.bandwidthKhz = static_cast<float>(atof(val));
+        radio::driver().setBandwidth(radioConfig_.bandwidthKhz);
+        saveRadioConfig();
+        Serial.printf("bw=%.1f kHz\n", static_cast<double>(radioConfig_.bandwidthKhz));
+      }
+    } else if (strcmp(sub, "cr") == 0) {
+      char* val = strtok(nullptr, " ");
+      const long v = val ? atol(val) : 0;
+      if (v < 5 || v > 8) { Serial.println("usage: radio cr <5-8>  (means 4/5..4/8)"); }
+      else {
+        radioConfig_.codingRate = static_cast<uint8_t>(v);
+        radio::driver().setCodingRate(radioConfig_.codingRate);
+        saveRadioConfig();
+        Serial.printf("cr=4/%u\n", radioConfig_.codingRate);
+      }
+    } else if (strcmp(sub, "power") == 0 || strcmp(sub, "pwr") == 0) {
+      char* val = strtok(nullptr, " ");
+      if (!val) { Serial.println("usage: radio power <dBm>"); }
+      else {
+        radioConfig_.powerDbm = static_cast<int8_t>(atol(val));
+        radio::driver().setPower(radioConfig_.powerDbm);
+        saveRadioConfig();
+        Serial.printf("pwr=%d dBm\n", radioConfig_.powerDbm);
+      }
+    } else {
+      Serial.println("usage: radio [freq|sf|bw|cr|power] [value]");
+    }
 
   } else if (strcmp(cmd, "ax25") == 0) {
     for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
@@ -370,8 +560,35 @@ void Tnc::handleConsoleLine(char* line) {
       char* path = strtok(nullptr, "");
       if (!setBeaconPath(path)) { Serial.println("usage: beacon path <CALL1,CALL2|off>"); }
       else { saveSettings(); printBeacon(); }
+    } else if (strcmp(sub, "aprs") == 0) {
+      // beacon aprs <lat> <lon> [symbol] [comment]
+      // Formats beacon text as APRS position and sets dest to APRS
+      char* latStr = strtok(nullptr, " ");
+      char* lonStr = strtok(nullptr, " ");
+      if (!latStr || !lonStr) {
+        Serial.println("usage: beacon aprs <lat> <lon> [sym2] [comment]");
+        Serial.println("  e.g. beacon aprs 52.0167 4.7000 /> LoRa TNC");
+      } else {
+        const double lat = atof(latStr);
+        const double lon = atof(lonStr);
+        char* sym  = strtok(nullptr, " ");
+        char* cmt  = strtok(nullptr, "");
+        char symBuf[3] = {'/', '>'};
+        if (sym && strlen(sym) >= 2) { symBuf[0] = sym[0]; symBuf[1] = sym[1]; }
+        char aprsInfo[96]{};
+        if (aprs::encodePosition(lat, lon, symBuf, cmt ? cmt : "", aprsInfo, sizeof(aprsInfo))) {
+          ax25::parseAddress("APRS", beacon_.destination);
+          strncpy(beacon_.text, aprsInfo, sizeof(beacon_.text) - 1);
+          beacon_.text[sizeof(beacon_.text) - 1] = '\0';
+          beacon_.enabled = true;
+          saveSettings();
+          printBeacon();
+        } else {
+          Serial.println("aprs encode failed");
+        }
+      }
     } else {
-      Serial.println("usage: beacon [on|off|now|text|dest|interval|path]");
+      Serial.println("usage: beacon [on|off|now|text|dest|interval|path|aprs]");
     }
 
   } else if (strcmp(cmd, "mheard") == 0) {
@@ -465,13 +682,14 @@ void Tnc::handleConsoleLine(char* line) {
 void Tnc::printInfo() const {
   char local[12]{};
   ax25::formatAddress(local_, local, sizeof(local));
-  Serial.printf("AXLoRaTNC local=%s variant=%s radio=%s freq=%.3f bw=%.1f sf=%u cr=4/%u\n",
+  Serial.printf("AXLoRaTNC local=%s variant=%s radio=%s\n",
                 local, variant::NAME,
-                variant::RADIO_TYPE == variant::RadioType::SX1262 ? "SX1262" : "SX1276",
-                static_cast<double>(variant::DEFAULT_FREQUENCY_MHZ),
-                static_cast<double>(variant::DEFAULT_BANDWIDTH_KHZ),
-                variant::DEFAULT_SPREADING_FACTOR,
-                variant::DEFAULT_CODING_RATE);
+                variant::RADIO_TYPE == variant::RadioType::SX1262 ? "SX1262" : "SX1276");
+  Serial.printf("  freq=%.3f MHz bw=%.1f kHz sf=%u cr=4/%u pwr=%d dBm\n",
+                static_cast<double>(radioConfig_.frequencyMHz),
+                static_cast<double>(radioConfig_.bandwidthKhz),
+                radioConfig_.spreadingFactor, radioConfig_.codingRate,
+                radioConfig_.powerDbm);
   Serial.printf("serial mode=%s channels=%u\n", serialModeName(), static_cast<unsigned>(CHANNEL_COUNT));
 }
 
@@ -639,20 +857,20 @@ void Tnc::handleNodeLine(uint8_t chIdx, const char* line) {
       sendNodeText(chIdx, row);
     }
   } else if (strcmp(cmd, "MHEARD") == 0) {
-    const uint32_t now = axlora::util::nowMs();
-    sendNodeText(chIdx, "callsign         dest       age_s  rssi  snr  via\r");
+    sendNodeText(chIdx, "callsign   dest       first    last     fr  rssi  snr\r");
     for (const MheardEntry& entry : mheard_) {
       if (!entry.active) continue;
-      char src[12]{}, dst[12]{};
+      char src[12]{}, dst[12]{}, first[10]{}, last[10]{};
       ax25::formatAddress(entry.source,      src, sizeof(src));
       ax25::formatAddress(entry.destination, dst, sizeof(dst));
-      char row[64]{};
-      snprintf(row, sizeof(row), "%-10s %-10s %-6lu %5.1f %5.1f %s\r",
-               src, dst,
-               static_cast<unsigned long>((now - entry.lastHeardMs) / 1000),
+      formatUptime(entry.firstHeardMs, first, sizeof(first));
+      formatUptime(entry.lastHeardMs,  last,  sizeof(last));
+      char row[80]{};
+      snprintf(row, sizeof(row), "%-10s %-10s %s %s %3lu %5.1f %5.1f\r",
+               src, dst, first, last,
+               static_cast<unsigned long>(entry.frames),
                static_cast<double>(entry.lastRssi),
-               static_cast<double>(entry.lastSnr),
-               entry.viaDigipeater ? "via" : "direct");
+               static_cast<double>(entry.lastSnr));
       sendNodeText(chIdx, row);
     }
   } else if (strcmp(cmd, "BBS") == 0) {
@@ -910,8 +1128,14 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
     return;
   }
 
-  // Acknowledge but ignore: JHOST1, M, U, T, P, S, F, N, O, V
-  if (strncmp(cmd, "JHOST1", 6) == 0 || cmd[0] == 'M' || cmd[0] == 'U' ||
+  if (cmd[0] == 'M') {
+    monitorEnabled_ = (cmd[1] != '0');  // M or M1 = on, M0 = off
+    sendDedShort(channel, 0);
+    return;
+  }
+
+  // Acknowledge but ignore: JHOST1, U, T, P, S, F, N, O, V
+  if (strncmp(cmd, "JHOST1", 6) == 0 || cmd[0] == 'U' ||
       cmd[0] == 'T' || cmd[0] == 'P' || cmd[0] == 'S' || cmd[0] == 'F' ||
       cmd[0] == 'N' || cmd[0] == 'O' || cmd[0] == 'V') {
     sendDedShort(channel, 0);
@@ -1101,16 +1325,17 @@ void Tnc::observeHeard(const ax25::Frame& frame, float rssi, float snr) {
 }
 
 void Tnc::printMheard() const {
-  const uint32_t now = axlora::util::nowMs();
-  Serial.println("mheard callsign dest age_s frames rssi snr via path");
+  Serial.println("callsign   dest       first    last     frames  rssi   snr  path");
   for (const MheardEntry& entry : mheard_) {
     if (!entry.active) continue;
     char source[12]{}, destination[12]{};
+    char first[10]{}, last[10]{};
     ax25::formatAddress(entry.source,      source,      sizeof(source));
     ax25::formatAddress(entry.destination, destination, sizeof(destination));
-    Serial.printf("%s %s %lu %lu %.1f %.1f %s %u\n",
-                  source, destination,
-                  static_cast<unsigned long>((now - entry.lastHeardMs) / 1000),
+    formatUptime(entry.firstHeardMs, first, sizeof(first));
+    formatUptime(entry.lastHeardMs,  last,  sizeof(last));
+    Serial.printf("%-10s %-10s %s %s %6lu %6.1f %5.1f  %s/%u\n",
+                  source, destination, first, last,
                   static_cast<unsigned long>(entry.frames),
                   static_cast<double>(entry.lastRssi),
                   static_cast<double>(entry.lastSnr),
@@ -1275,6 +1500,12 @@ void Tnc::printNetromRoutes() const {
 void Tnc::loadSettings() {
   Preferences prefs;
   if (prefs.begin("axloratnc", true)) {
+    prefs.getString("callsign", savedCallsign_, sizeof(savedCallsign_));
+    radioConfig_.frequencyMHz    = prefs.getFloat("r_freq", variant::DEFAULT_FREQUENCY_MHZ);
+    radioConfig_.bandwidthKhz    = prefs.getFloat("r_bw",   variant::DEFAULT_BANDWIDTH_KHZ);
+    radioConfig_.spreadingFactor = prefs.getUChar("r_sf",   variant::DEFAULT_SPREADING_FACTOR);
+    radioConfig_.codingRate      = prefs.getUChar("r_cr",   variant::DEFAULT_CODING_RATE);
+    radioConfig_.powerDbm        = static_cast<int8_t>(prefs.getChar("r_pwr", variant::DEFAULT_TX_POWER_DBM));
     serialMode_ = static_cast<SerialMode>(
         prefs.getUChar("mode", static_cast<uint8_t>(SerialMode::Console)));
     digi_.enabled  = prefs.getBool("digi_en",       digi_.enabled);
@@ -1334,6 +1565,32 @@ void Tnc::saveSettings() {
   prefs.putString("nr_alias", netrom_.alias);
   prefs.putString("nr_ident", netrom_.ident);
   prefs.end();
+}
+
+void Tnc::saveRadioConfig() {
+  Preferences prefs;
+  if (!prefs.begin("axloratnc", false)) return;
+  prefs.putFloat("r_freq", radioConfig_.frequencyMHz);
+  prefs.putFloat("r_bw",   radioConfig_.bandwidthKhz);
+  prefs.putUChar("r_sf",   radioConfig_.spreadingFactor);
+  prefs.putUChar("r_cr",   radioConfig_.codingRate);
+  prefs.putChar("r_pwr",   radioConfig_.powerDbm);
+  prefs.end();
+}
+
+void Tnc::applyRadioConfig() {
+  auto& drv = radio::driver();
+  drv.setFrequency(radioConfig_.frequencyMHz);
+  drv.setSpreadingFactor(radioConfig_.spreadingFactor);
+  drv.setBandwidth(radioConfig_.bandwidthKhz);
+  drv.setCodingRate(radioConfig_.codingRate);
+  drv.setPower(radioConfig_.powerDbm);
+  LOG_RADIO("radio config applied: freq=%.3f sf=%u bw=%.1f cr=%u pwr=%d",
+            static_cast<double>(radioConfig_.frequencyMHz),
+            radioConfig_.spreadingFactor,
+            static_cast<double>(radioConfig_.bandwidthKhz),
+            radioConfig_.codingRate,
+            radioConfig_.powerDbm);
 }
 
 void Tnc::saveSerialMode(SerialMode mode) {
