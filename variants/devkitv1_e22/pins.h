@@ -20,8 +20,10 @@ static constexpr int PIN_LED_TX = 2;
 static constexpr int PIN_LED_RX = -1;
 static constexpr int PIN_BATTERY_ADC = 35;
 
-static constexpr int PIN_OLED_SDA = -1;
-static constexpr int PIN_OLED_SCL = -1;
+static constexpr int PIN_OLED_SDA  = 21;   // Standard ESP32 I2C — adjust if needed
+static constexpr int PIN_OLED_SCL  = 22;
+static constexpr int PIN_OLED_RST  = -1;   // Most SSD1306 breakouts have no reset pin
+static constexpr int PIN_OLED_VEXT = -1;   // No power switch on bare breakout
 static constexpr int PIN_GPS_RX = -1;
 static constexpr int PIN_GPS_TX = -1;
 static constexpr int PIN_DS18B20_ONEWIRE = 27;

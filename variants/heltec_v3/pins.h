@@ -17,8 +17,10 @@ static constexpr int PIN_LED_TX = 35;
 static constexpr int PIN_LED_RX = -1;
 static constexpr int PIN_BATTERY_ADC = 1;
 
-static constexpr int PIN_OLED_SDA = 17;
-static constexpr int PIN_OLED_SCL = 18;
+static constexpr int PIN_OLED_SDA  = 17;
+static constexpr int PIN_OLED_SCL  = 18;
+static constexpr int PIN_OLED_RST  = 21;   // Heltec V3 OLED reset
+static constexpr int PIN_OLED_VEXT = 36;   // TPS22860 Vext switch — HIGH = on
 static constexpr int PIN_GPS_RX = -1;
 static constexpr int PIN_GPS_TX = -1;
 static constexpr int PIN_DS18B20_ONEWIRE = -1;

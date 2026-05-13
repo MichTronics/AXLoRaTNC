@@ -6,6 +6,7 @@
 #include "ax25/ax25_frame.h"
 #include "ax25/ax25_kiss.h"
 #include "ax25/ax25_l2.h"
+#include "display/display.h"
 #include "mailbox.h"
 #include "radio/radio.h"
 #include "util/ringbuffer.h"
@@ -58,6 +59,7 @@ class Tnc {
   bool quietSerialMode() const { return serialMode_ != SerialMode::Console; }
   void printInfo() const;
   void printStats() const;
+  void fillDisplayInfo(display::DisplayInfo& out) const;
   bool connect(uint8_t chIdx, const char* destination);
   bool disconnect(uint8_t chIdx);
   bool sendUi(const char* destination, const char* text);
@@ -232,6 +234,8 @@ class Tnc {
   NetromRoute      netromRoutes_[20]{};
 
   bool     monitorEnabled_   = false;
+  float    lastRssi_         = 0.0f;
+  float    lastSnr_          = 0.0f;
   uint32_t rawTx_           = 0;
   uint32_t rawRx_           = 0;
   uint32_t beaconTx_        = 0;

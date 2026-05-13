@@ -216,6 +216,8 @@ void Tnc::serviceRadio() {
   radio::RxPacket rx{};
   if (radio::driver().receive(rx) != radio::Result::Ok) return;
   lastRxMs_ = axlora::util::nowMs();
+  lastRssi_ = rx.rssi;
+  lastSnr_  = rx.snr;
   ++rawRx_;
   if (rx.len >= 2 && ax25::checkFcs(rx.data, rx.len)) {
     emitKissData(rx.data, rx.len - 2);
@@ -1490,6 +1492,49 @@ void Tnc::printNetromRoutes() const {
                   route.alias, node, via, route.quality,
                   static_cast<unsigned long>((now - route.lastHeardMs) / 1000),
                   route.obsolescence);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Display info
+// ---------------------------------------------------------------------------
+
+void Tnc::fillDisplayInfo(display::DisplayInfo& out) const {
+  ax25::formatAddress(local_, out.callsign, sizeof(out.callsign));
+
+  const char* mname = serialModeName();
+  size_t mi = 0;
+  for (; mname[mi] && mi < sizeof(out.mode) - 1; ++mi) {
+    const char c = mname[mi];
+    out.mode[mi] = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 32) : c;
+  }
+  out.mode[mi] = '\0';
+
+  out.freqMHz  = radioConfig_.frequencyMHz;
+  out.sf       = radioConfig_.spreadingFactor;
+  out.powerDbm = radioConfig_.powerDbm;
+
+  const radio::Stats& rs = radio::stats();
+  out.txCount  = rs.txOk;
+  out.rxCount  = rs.rxOk;
+  out.lastRssi = lastRssi_;
+  out.lastSnr  = lastSnr_;
+
+  out.anyConnected = false;
+  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
+    const ax25::LinkState s = channels_[i].link.state();
+    if (s == ax25::LinkState::Disconnected) continue;
+    out.anyConnected = true;
+    out.connChannel  = i + 1;
+    ax25::formatAddress(channels_[i].link.peer(), out.connPeer, sizeof(out.connPeer));
+    switch (s) {
+      case ax25::LinkState::Connecting:    strncpy(out.connState, "CON", 4); break;
+      case ax25::LinkState::Connected:     strncpy(out.connState, "OK",  4); break;
+      case ax25::LinkState::Disconnecting: strncpy(out.connState, "DIS", 4); break;
+      case ax25::LinkState::Recovery:      strncpy(out.connState, "REC", 4); break;
+      default:                             strncpy(out.connState, "?",   4); break;
+    }
+    break;
   }
 }
 

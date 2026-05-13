@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "axlora_config.h"
+#include "display/display.h"
 #include "radio/radio.h"
 #include "tnc/tnc.h"
 #include "util/log.h"
@@ -10,7 +11,9 @@ namespace {
 axlora::tnc::Tnc tnc;
 bool radioReady = false;
 uint32_t lastRadioInitMs = 0;
-static constexpr uint32_t RADIO_INIT_RETRY_MS = 5000;
+uint32_t lastDisplayMs   = 0;
+static constexpr uint32_t RADIO_INIT_RETRY_MS  = 5000;
+static constexpr uint32_t DISPLAY_UPDATE_MS    = 1000;
 
 void serviceRadioInit(bool force) {
   const uint32_t now = axlora::util::nowMs();
@@ -32,6 +35,7 @@ void setup() {
   if (axlora::variant::PIN_LED_RX >= 0) {
     pinMode(axlora::variant::PIN_LED_RX, OUTPUT);
   }
+  axlora::display::init();
   tnc.begin(axlora::variant::DEFAULT_CALLSIGN);
   LOG_INFO("boot AXLoRaTNC");
 
@@ -45,5 +49,17 @@ void setup() {
 void loop() {
   serviceRadioInit(false);
   tnc.loop(radioReady);
+
+  if constexpr (axlora::variant::HAS_OLED) {
+    const uint32_t now = axlora::util::nowMs();
+    if (axlora::util::elapsed(now, lastDisplayMs, DISPLAY_UPDATE_MS)) {
+      lastDisplayMs = now;
+      axlora::display::DisplayInfo info{};
+      tnc.fillDisplayInfo(info);
+      info.radioReady = radioReady;
+      axlora::display::update(info);
+    }
+  }
+
   taskYIELD();
 }
