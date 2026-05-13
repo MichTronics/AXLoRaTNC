@@ -404,7 +404,7 @@ void Tnc::handleConsoleLine(char* line) {
 
   if (strcmp(cmd, "help") == 0) {
     Serial.println("Commands: help info callsign mode stats bbs");
-    Serial.println("          radio [freq|sf|bw|cr|power|reset] [val]");
+    Serial.println("          radio [freq|corr|sf|bw|cr|power|reset] [val]");
     Serial.println("          duty [on|off|percent]");
     Serial.println("          profile [fast|normal]");
     Serial.println("          ax25 connect [ch] <CALL> disconnect [ch]");
@@ -463,8 +463,9 @@ void Tnc::handleConsoleLine(char* line) {
   } else if (strcmp(cmd, "radio") == 0) {
     char* sub = strtok(nullptr, " ");
     if (sub == nullptr) {
-      Serial.printf("freq=%.3f bw=%.1f sf=%u cr=4/%u pwr=%d RSSI=%.1f SNR=%.1f\n",
+      Serial.printf("freq=%.3f corr=%+.1f kHz bw=%.1f sf=%u cr=4/%u pwr=%d RSSI=%.1f SNR=%.1f\n",
                     static_cast<double>(radioConfig_.frequencyMHz),
+                    static_cast<double>(radioConfig_.frequencyCorrectionMHz * 1000.0f),
                     static_cast<double>(radioConfig_.bandwidthKhz),
                     radioConfig_.spreadingFactor, radioConfig_.codingRate,
                     radioConfig_.powerDbm,
@@ -472,6 +473,7 @@ void Tnc::handleConsoleLine(char* line) {
                     static_cast<double>(radio::driver().getSNR()));
     } else if (strcmp(sub, "reset") == 0) {
       radioConfig_.frequencyMHz    = variant::DEFAULT_FREQUENCY_MHZ;
+      radioConfig_.frequencyCorrectionMHz = variant::DEFAULT_FREQUENCY_CORRECTION_MHZ;
       radioConfig_.bandwidthKhz    = variant::DEFAULT_BANDWIDTH_KHZ;
       radioConfig_.spreadingFactor = variant::DEFAULT_SPREADING_FACTOR;
       radioConfig_.codingRate      = variant::DEFAULT_CODING_RATE;
@@ -479,8 +481,9 @@ void Tnc::handleConsoleLine(char* line) {
       applyRadioConfig();
       radioConfigApplied_ = true;
       saveRadioConfig();
-      Serial.printf("radio reset freq=%.3f bw=%.1f sf=%u cr=4/%u pwr=%d\n",
+      Serial.printf("radio reset freq=%.3f corr=%+.1f kHz bw=%.1f sf=%u cr=4/%u pwr=%d\n",
                     static_cast<double>(radioConfig_.frequencyMHz),
+                    static_cast<double>(radioConfig_.frequencyCorrectionMHz * 1000.0f),
                     static_cast<double>(radioConfig_.bandwidthKhz),
                     radioConfig_.spreadingFactor, radioConfig_.codingRate,
                     radioConfig_.powerDbm);
@@ -492,6 +495,25 @@ void Tnc::handleConsoleLine(char* line) {
         radio::driver().setFrequency(radioConfig_.frequencyMHz);
         saveRadioConfig();
         Serial.printf("freq=%.3f MHz\n", static_cast<double>(radioConfig_.frequencyMHz));
+      }
+    } else if (strcmp(sub, "corr") == 0 || strcmp(sub, "correction") == 0 || strcmp(sub, "offset") == 0) {
+      char* val = strtok(nullptr, " ");
+      if (!val) {
+        Serial.printf("corr=%+.1f kHz\n", static_cast<double>(radioConfig_.frequencyCorrectionMHz * 1000.0f));
+      } else if constexpr (variant::RADIO_TYPE != variant::RadioType::SX1276) {
+        Serial.println("radio corr is only used by SX1276 variants");
+      } else {
+        const float correctionKhz = static_cast<float>(atof(val));
+        if (correctionKhz < -250.0f || correctionKhz > 250.0f) {
+          Serial.println("usage: radio corr <kHz>  (-250..250)");
+        } else {
+          radioConfig_.frequencyCorrectionMHz = correctionKhz / 1000.0f;
+          radio::driver().setFrequencyCorrection(radioConfig_.frequencyCorrectionMHz);
+          saveRadioConfig();
+          Serial.printf("corr=%+.1f kHz tuned=%.3f MHz\n",
+                        static_cast<double>(correctionKhz),
+                        static_cast<double>(radioConfig_.frequencyMHz + radioConfig_.frequencyCorrectionMHz));
+        }
       }
     } else if (strcmp(sub, "sf") == 0) {
       char* val = strtok(nullptr, " ");
@@ -532,7 +554,7 @@ void Tnc::handleConsoleLine(char* line) {
         Serial.printf("pwr=%d dBm\n", radioConfig_.powerDbm);
       }
     } else {
-      Serial.println("usage: radio [freq|sf|bw|cr|power|reset] [value]");
+      Serial.println("usage: radio [freq|corr|sf|bw|cr|power|reset] [value]");
     }
 
   } else if (strcmp(cmd, "duty") == 0) {
@@ -829,6 +851,9 @@ void Tnc::printInfo() const {
                 static_cast<double>(radioConfig_.bandwidthKhz),
                 radioConfig_.spreadingFactor, radioConfig_.codingRate,
                 radioConfig_.powerDbm);
+  Serial.printf("  freq_corr=%+.1f kHz tuned=%.3f MHz\n",
+                static_cast<double>(radioConfig_.frequencyCorrectionMHz * 1000.0f),
+                static_cast<double>(radioConfig_.frequencyMHz + radioConfig_.frequencyCorrectionMHz));
   Serial.printf("  duty=%s %.3f%%\n", dutyCycleEnabled_ ? "on" : "off",
                 static_cast<double>(dutyCyclePpm_) / 10000.0);
   Serial.printf("serial mode=%s channels=%u\n", serialModeName(), static_cast<unsigned>(CHANNEL_COUNT));
@@ -1713,6 +1738,7 @@ void Tnc::loadSettings() {
   if (prefs.begin("axloratnc", true)) {
     prefs.getString("callsign", savedCallsign_, sizeof(savedCallsign_));
     radioConfig_.frequencyMHz    = prefs.getFloat("r_freq", variant::DEFAULT_FREQUENCY_MHZ);
+    radioConfig_.frequencyCorrectionMHz = prefs.getFloat("r_fcorr", variant::DEFAULT_FREQUENCY_CORRECTION_MHZ);
     radioConfig_.bandwidthKhz    = prefs.getFloat("r_bw",   variant::DEFAULT_BANDWIDTH_KHZ);
     radioConfig_.spreadingFactor = prefs.getUChar("r_sf",   variant::DEFAULT_SPREADING_FACTOR);
     radioConfig_.codingRate      = prefs.getUChar("r_cr",   variant::DEFAULT_CODING_RATE);
@@ -1786,6 +1812,7 @@ void Tnc::saveRadioConfig() {
   Preferences prefs;
   if (!prefs.begin("axloratnc", false)) return;
   prefs.putFloat("r_freq", radioConfig_.frequencyMHz);
+  prefs.putFloat("r_fcorr", radioConfig_.frequencyCorrectionMHz);
   prefs.putFloat("r_bw",   radioConfig_.bandwidthKhz);
   prefs.putUChar("r_sf",   radioConfig_.spreadingFactor);
   prefs.putUChar("r_cr",   radioConfig_.codingRate);
@@ -1798,13 +1825,15 @@ void Tnc::saveRadioConfig() {
 void Tnc::applyRadioConfig() {
   auto& drv = radio::driver();
   drv.setDutyCycle(dutyCycleEnabled_, dutyCyclePpm_);
+  drv.setFrequencyCorrection(radioConfig_.frequencyCorrectionMHz);
   drv.setFrequency(radioConfig_.frequencyMHz);
   drv.setSpreadingFactor(radioConfig_.spreadingFactor);
   drv.setBandwidth(radioConfig_.bandwidthKhz);
   drv.setCodingRate(radioConfig_.codingRate);
   drv.setPower(radioConfig_.powerDbm);
-  LOG_RADIO("radio config applied: freq=%.3f sf=%u bw=%.1f cr=%u pwr=%d",
+  LOG_RADIO("radio config applied: freq=%.3f corr=%+.1fkHz sf=%u bw=%.1f cr=%u pwr=%d",
             static_cast<double>(radioConfig_.frequencyMHz),
+            static_cast<double>(radioConfig_.frequencyCorrectionMHz * 1000.0f),
             radioConfig_.spreadingFactor,
             static_cast<double>(radioConfig_.bandwidthKhz),
             radioConfig_.codingRate,

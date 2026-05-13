@@ -117,6 +117,11 @@ class Sx1262Driver final : public Driver {
     return Result::Ok;
   }
 
+  Result setFrequencyCorrection(float correctionMHz) override {
+    (void)correctionMHz;
+    return Result::Ok;
+  }
+
   Result setPower(int8_t powerDbm) override {
     if (powerDbm > variant::MAX_TX_POWER_DBM) powerDbm = variant::MAX_TX_POWER_DBM;
     return radio_.setOutputPower(powerDbm) == RADIOLIB_ERR_NONE

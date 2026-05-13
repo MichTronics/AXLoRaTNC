@@ -20,10 +20,6 @@ constexpr uint32_t radioLibPin(int pin) {
   return pin >= 0 ? static_cast<uint32_t>(pin) : RADIOLIB_NC;
 }
 
-constexpr float correctedFrequencyMHz(float frequencyMHz) {
-  return frequencyMHz + variant::SX1276_FREQUENCY_CORRECTION_MHZ;
-}
-
 class Sx1276Driver final : public Driver {
  public:
   Result init() override {
@@ -36,7 +32,9 @@ class Sx1276Driver final : public Driver {
       digitalWrite(variant::PIN_LED_RX, LOW);
     }
     SPI.begin(variant::PIN_SPI_SCK, variant::PIN_SPI_MISO, variant::PIN_SPI_MOSI, variant::PIN_RADIO_CS);
-    const int16_t state = radio_.begin(correctedFrequencyMHz(variant::DEFAULT_FREQUENCY_MHZ),
+    logicalFrequencyMHz_ = variant::DEFAULT_FREQUENCY_MHZ;
+    frequencyCorrectionMHz_ = variant::DEFAULT_FREQUENCY_CORRECTION_MHZ;
+    const int16_t state = radio_.begin(correctedFrequencyMHz(logicalFrequencyMHz_),
                                        variant::DEFAULT_BANDWIDTH_KHZ,
                                        variant::DEFAULT_SPREADING_FACTOR,
                                        variant::DEFAULT_CODING_RATE,
@@ -116,7 +114,16 @@ class Sx1276Driver final : public Driver {
   }
 
   Result setFrequency(float frequencyMHz) override {
+    logicalFrequencyMHz_ = frequencyMHz;
     const int16_t s = radio_.setFrequency(correctedFrequencyMHz(frequencyMHz));
+    if (s != RADIOLIB_ERR_NONE) return Result::HardwareError;
+    radio_.startReceive();
+    return Result::Ok;
+  }
+
+  Result setFrequencyCorrection(float correctionMHz) override {
+    frequencyCorrectionMHz_ = correctionMHz;
+    const int16_t s = radio_.setFrequency(correctedFrequencyMHz(logicalFrequencyMHz_));
     if (s != RADIOLIB_ERR_NONE) return Result::HardwareError;
     radio_.startReceive();
     return Result::Ok;
@@ -167,6 +174,10 @@ class Sx1276Driver final : public Driver {
   void standby() override { radio_.standby(); }
 
  private:
+  float correctedFrequencyMHz(float frequencyMHz) const {
+    return frequencyMHz + frequencyCorrectionMHz_;
+  }
+
   void updateRxLed() {
     if constexpr (variant::PIN_LED_RX >= 0) {
       if (rxLedOffMs_ != 0 &&
@@ -212,6 +223,8 @@ class Sx1276Driver final : public Driver {
                  radioLibPin(variant::PIN_RADIO_RST),
                  radioLibPin(variant::PIN_RADIO_DIO2)};
   SX1276 radio_{&module_};
+  float logicalFrequencyMHz_ = variant::DEFAULT_FREQUENCY_MHZ;
+  float frequencyCorrectionMHz_ = variant::DEFAULT_FREQUENCY_CORRECTION_MHZ;
   uint32_t lastTxMs_ = 0;
   uint32_t lastAirTimeMs_ = 0;
   uint32_t rxLedOffMs_ = 0;

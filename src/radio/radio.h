@@ -32,6 +32,7 @@ struct Stats {
 
 struct RadioConfig {
   float   frequencyMHz    = variant::DEFAULT_FREQUENCY_MHZ;
+  float   frequencyCorrectionMHz = variant::DEFAULT_FREQUENCY_CORRECTION_MHZ;
   float   bandwidthKhz    = variant::DEFAULT_BANDWIDTH_KHZ;
   uint8_t spreadingFactor = variant::DEFAULT_SPREADING_FACTOR;
   uint8_t codingRate      = variant::DEFAULT_CODING_RATE;
@@ -45,6 +46,7 @@ class Driver {
   virtual Result send(const uint8_t* data, size_t len) = 0;
   virtual Result receive(RxPacket& packet) = 0;
   virtual Result setFrequency(float frequencyMHz) = 0;
+  virtual Result setFrequencyCorrection(float correctionMHz) = 0;
   virtual Result setPower(int8_t powerDbm) = 0;
   virtual Result setSpreadingFactor(uint8_t sf) = 0;
   virtual Result setBandwidth(float bandwidthKhz) = 0;
