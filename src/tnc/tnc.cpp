@@ -91,7 +91,7 @@ static void formatByteParam(char prefix, uint8_t value, char* out, size_t cap) {
 }
 
 static uint32_t baudForMode(SerialMode mode) {
-  return mode == SerialMode::Wa8ded ? 9600U : variant::SERIAL_BAUD;
+  return mode == SerialMode::Wa8ded || mode == SerialMode::Kiss ? 9600U : variant::SERIAL_BAUD;
 }
 
 
@@ -1401,6 +1401,14 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     return;
   }
 
+  if (strncmp(cmd, "CONSOLE", 7) == 0) {
+    Serial.print("mode=console\r\n");
+    Serial.flush();
+    setSerialMode(SerialMode::Console);
+    saveSerialMode(SerialMode::Console);
+    return;
+  }
+
   if (c == 'C') {
     if (*arg == '\0') {
       char dest[12]{};
@@ -2064,8 +2072,7 @@ bool Tnc::popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out) {
 }
 
 void Tnc::handleQuietEscape(uint8_t byte) {
-  if (byte == '\r') return;
-  if (byte == '\n') {
+  if (byte == '\r' || byte == '\n') {
     escapeLine_[escapePos_] = '\0';
     if (strcmp(escapeLine_, "console") == 0) {
       setSerialMode(SerialMode::Console); saveSerialMode(SerialMode::Console);
