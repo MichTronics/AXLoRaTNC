@@ -20,17 +20,6 @@ bool textToAddress(const char* text, ax25::Address& out) {
   return text != nullptr && text[0] != '\0' && ax25::parseAddress(text, out);
 }
 
-// Case-insensitive callsign comparison (no SSID)
-bool callsignEq(const char* a, const char* b) {
-  if (!a || !b) return false;
-  while (*a && *b) {
-    char ca = (*a >= 'a' && *a <= 'z') ? static_cast<char>(*a - 32) : *a;
-    char cb = (*b >= 'a' && *b <= 'z') ? static_cast<char>(*b - 32) : *b;
-    if (ca != cb) return false;
-    ++a; ++b;
-  }
-  return *a == '\0' && *b == '\0';
-}
 
 }  // namespace
 
