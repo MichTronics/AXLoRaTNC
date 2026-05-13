@@ -10,15 +10,33 @@
 namespace axlora::radio {
 namespace {
 
+static volatile bool rxFlag_ = false;
+
+IRAM_ATTR static void onDio0Interrupt() {
+  rxFlag_ = true;
+}
+
 constexpr uint32_t radioLibPin(int pin) {
   return pin >= 0 ? static_cast<uint32_t>(pin) : RADIOLIB_NC;
+}
+
+constexpr float correctedFrequencyMHz(float frequencyMHz) {
+  return frequencyMHz + variant::SX1276_FREQUENCY_CORRECTION_MHZ;
 }
 
 class Sx1276Driver final : public Driver {
  public:
   Result init() override {
+    if constexpr (variant::PIN_LED_TX >= 0) {
+      pinMode(variant::PIN_LED_TX, OUTPUT);
+      digitalWrite(variant::PIN_LED_TX, LOW);
+    }
+    if constexpr (variant::PIN_LED_RX >= 0) {
+      pinMode(variant::PIN_LED_RX, OUTPUT);
+      digitalWrite(variant::PIN_LED_RX, LOW);
+    }
     SPI.begin(variant::PIN_SPI_SCK, variant::PIN_SPI_MISO, variant::PIN_SPI_MOSI, variant::PIN_RADIO_CS);
-    const int16_t state = radio_.begin(variant::DEFAULT_FREQUENCY_MHZ,
+    const int16_t state = radio_.begin(correctedFrequencyMHz(variant::DEFAULT_FREQUENCY_MHZ),
                                        variant::DEFAULT_BANDWIDTH_KHZ,
                                        variant::DEFAULT_SPREADING_FACTOR,
                                        variant::DEFAULT_CODING_RATE,
@@ -29,11 +47,15 @@ class Sx1276Driver final : public Driver {
       LOG_ERR("SX1276 init failed: %d", state);
       return Result::HardwareError;
     }
+    radio_.setCRC(true);
+    radio_.invertIQ(false);
+    radio_.setDio0Action(onDio0Interrupt, RISING);
     radio_.startReceive();
     return Result::Ok;
   }
 
   Result send(const uint8_t* data, size_t len) override {
+    updateRxLed();
     if (data == nullptr || len == 0) {
       return Result::Invalid;
     }
@@ -45,7 +67,10 @@ class Sx1276Driver final : public Driver {
       ++stats().dutyDrops;
       return Result::Busy;
     }
+    setTxLed(true);
     const int16_t state = radio_.transmit(const_cast<uint8_t*>(data), len);
+    setTxLed(false);
+    rxFlag_ = false;
     radio_.startReceive();
     if (state == RADIOLIB_ERR_NONE) {
       lastTxMs_ = now;
@@ -58,14 +83,23 @@ class Sx1276Driver final : public Driver {
   }
 
   Result receive(RxPacket& packet) override {
+    updateRxLed();
+    if (!rxFlag_) {
+      return Result::NoPacket;
+    }
+    rxFlag_ = false;
+
     packet.len = radio_.getPacketLength();
     if (packet.len == 0 || packet.len > sizeof(packet.data)) {
+      radio_.startReceive();
       return Result::NoPacket;
     }
     const int16_t state = radio_.readData(packet.data, packet.len);
     if (state == RADIOLIB_ERR_NONE) {
+      pulseRxLed();
       packet.rssi = radio_.getRSSI();
       packet.snr = radio_.getSNR();
+      radio_.getFrequencyError(true);
       ++stats().rxOk;
       radio_.startReceive();
       return Result::Ok;
@@ -74,24 +108,35 @@ class Sx1276Driver final : public Driver {
       if (state == RADIOLIB_ERR_CRC_MISMATCH) {
         ++stats().rxFail;
       }
+      radio_.startReceive();
       return Result::NoPacket;
     }
+    radio_.startReceive();
     return Result::NoPacket;
   }
 
   Result setFrequency(float frequencyMHz) override {
-    return radio_.setFrequency(frequencyMHz) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
+    const int16_t s = radio_.setFrequency(correctedFrequencyMHz(frequencyMHz));
+    if (s != RADIOLIB_ERR_NONE) return Result::HardwareError;
+    radio_.startReceive();
+    return Result::Ok;
   }
 
   Result setPower(int8_t powerDbm) override {
     if (powerDbm > variant::MAX_TX_POWER_DBM) {
       powerDbm = variant::MAX_TX_POWER_DBM;
     }
-    return radio_.setOutputPower(powerDbm) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
+    const int16_t s = radio_.setOutputPower(powerDbm);
+    if (s != RADIOLIB_ERR_NONE) return Result::HardwareError;
+    radio_.startReceive();
+    return Result::Ok;
   }
 
   Result setSpreadingFactor(uint8_t sf) override {
-    return radio_.setSpreadingFactor(sf) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
+    const int16_t s = radio_.setSpreadingFactor(sf);
+    if (s != RADIOLIB_ERR_NONE) return Result::HardwareError;
+    radio_.startReceive();
+    return Result::Ok;
   }
 
   Result setBandwidth(float bandwidthKhz) override {
@@ -102,7 +147,10 @@ class Sx1276Driver final : public Driver {
   }
 
   Result setCodingRate(uint8_t cr) override {
-    return radio_.setCodingRate(cr) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
+    const int16_t s = radio_.setCodingRate(cr);
+    if (s != RADIOLIB_ERR_NONE) return Result::HardwareError;
+    radio_.startReceive();
+    return Result::Ok;
   }
 
   void setDutyCycle(bool enabled, uint32_t dutyCyclePpm) override {
@@ -119,8 +167,33 @@ class Sx1276Driver final : public Driver {
   void standby() override { radio_.standby(); }
 
  private:
-  uint32_t estimateAirtimeMs(size_t len) const {
-    return static_cast<uint32_t>(500 + (len * 12));
+  void updateRxLed() {
+    if constexpr (variant::PIN_LED_RX >= 0) {
+      if (rxLedOffMs_ != 0 &&
+          static_cast<int32_t>(util::nowMs() - rxLedOffMs_) >= 0) {
+        digitalWrite(variant::PIN_LED_RX, LOW);
+        rxLedOffMs_ = 0;
+      }
+    }
+  }
+
+  void pulseRxLed() {
+    if constexpr (variant::PIN_LED_RX >= 0) {
+      digitalWrite(variant::PIN_LED_RX, HIGH);
+      rxLedOffMs_ = util::nowMs() + 25;
+    }
+  }
+
+  void setTxLed(bool on) {
+    if constexpr (variant::PIN_LED_TX >= 0) {
+      digitalWrite(variant::PIN_LED_TX, on ? HIGH : LOW);
+    }
+  }
+
+  uint32_t estimateAirtimeMs(size_t len) {
+    const RadioLibTime_t airtimeUs = radio_.getTimeOnAir(len);
+    const uint32_t airtimeMs = static_cast<uint32_t>((airtimeUs + 999) / 1000);
+    return airtimeMs == 0 ? 1 : airtimeMs;
   }
 
   bool canTransmit(uint32_t now) const {
@@ -141,6 +214,7 @@ class Sx1276Driver final : public Driver {
   SX1276 radio_{&module_};
   uint32_t lastTxMs_ = 0;
   uint32_t lastAirTimeMs_ = 0;
+  uint32_t rxLedOffMs_ = 0;
   bool dutyCycleEnabled_ = true;
   uint32_t dutyCyclePpm_ = variant::DUTY_CYCLE_PPM;
 };
