@@ -159,6 +159,13 @@ class Tnc {
 
   // WA8DED
   void serviceWa8ded(uint8_t byte);
+  void serviceWa8dedHost(uint8_t byte);
+  void serviceWa8dedTerminal(uint8_t byte);
+  void handleDedTerminalLine(const char* line, bool command);
+  void handleDedAtCommand(const char* cmd);
+  void applyDedLinkConfig();
+  void serviceDedTerminalOutput();
+  void printDedTerminalStatus(int channel) const;
   void handleDedHostFrame(uint8_t channel, uint8_t infoCmd, const uint8_t* data, size_t len);
   void handleDedCommand(uint8_t channel, const char* command, size_t len);
   void sendDedShort(uint8_t channel, uint8_t code);
@@ -207,6 +214,7 @@ class Tnc {
   void applyRadioConfig();
   void saveSerialMode(SerialMode mode);
   void setSerialMode(SerialMode mode);
+  void applySerialBaud();
   const char* serialModeName() const;
 
   // CSMA
@@ -239,6 +247,35 @@ class Tnc {
   size_t  dedDataPos_   = 0;
   size_t  dedDataLen_   = 0;
   axlora::util::RingBuffer<DedEvent, 32> dedEvents_;
+  bool    dedHostMode_         = false;
+  bool    dedTerminalCommand_  = false;
+  bool    dedEcho_             = true;
+  bool    dedAutoLf_           = true;
+  bool    dedTimestamp_        = false;
+  bool    dedFlow_             = true;
+  bool    dedXonXoff_          = true;
+  bool    dedOutputPaused_     = false;
+  bool    dedUnattended_       = false;
+  uint8_t dedCtextMode_        = 0;
+  uint8_t dedSelectedChannel_  = 0;
+  uint8_t dedMaxIncoming_      = 4;
+  uint16_t dedDamaTimeout_     = 120;
+  uint16_t dedFrack_           = 250;
+  uint8_t dedHeardMode_        = 0;
+  uint8_t dedRetryLimit_       = 10;
+  uint8_t dedMaxFrame_         = 2;
+  bool    dedTxEnabled_        = true;
+  uint8_t dedSrttA1_           = 7;
+  uint8_t dedSrttA2_           = 15;
+  uint8_t dedSrttA3_           = 3;
+  uint8_t dedIPollFrameLength_ = 60;
+  bool    dedEightBitTerminal_ = true;
+  bool    dedValidateCallsign_ = true;
+  uint16_t dedT2_              = 150;
+  uint16_t dedT3_              = 18000;
+  ax25::Address dedUnprotoDestination_{};
+  char    dedMonitorMode_[20]  = "IU";
+  char    dedUnattendedText_[80]{};
 
   DigipeaterConfig digi_{};
   DigiCacheEntry   digiCache_[16]{};

@@ -53,6 +53,11 @@ class LinkLayer {
   bool disconnect();
   bool sendConnected(const uint8_t* data, size_t len);
   size_t connectedQueueSize() const { return txQueue_.size(); }
+  uint8_t outstandingFrameCount() const { return outstandingCount(); }
+  uint8_t retryCount() const { return retryCount_; }
+  void setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms);
+  void setRetryLimit(uint8_t n2);
+  void setMaxFrame(uint8_t maxFrame);
   void receive(const uint8_t* data, size_t len);
   void printStats() const;
   void printStatus() const;
@@ -113,7 +118,7 @@ class LinkLayer {
   uint8_t vr_ = 0;
   uint8_t retryCount_ = 0;
   bool peerBusy_ = false;
-  static constexpr uint8_t WINDOW_SIZE = 4;
+  static constexpr uint8_t WINDOW_SIZE = 7;
   WindowSlot window_[WINDOW_SIZE]{};
   ReceiveSlot receiveWindow_[WINDOW_SIZE]{};
   bool srejPending_[8]{};
@@ -121,6 +126,7 @@ class LinkLayer {
   Timer t2_;
   Timer t3_;
   bool  t2PendingAck_ = false;
+  uint8_t maxFrame_ = WINDOW_SIZE;
   axlora::util::RingBuffer<QueuedInfo, 6> txQueue_;
   L2Stats stats_{};
 };

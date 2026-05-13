@@ -15,6 +15,7 @@ uint8_t seqDistance(uint8_t from, uint8_t to) {
 
 void LinkLayer::begin(const L2Config& config, TxCallback tx, DataCallback data, void* ctx) {
   config_ = config;
+  if (maxFrame_ == 0 || maxFrame_ > WINDOW_SIZE) maxFrame_ = WINDOW_SIZE;
   tx_ = tx;
   data_ = data;
   ctx_ = ctx;
@@ -23,7 +24,7 @@ void LinkLayer::begin(const L2Config& config, TxCallback tx, DataCallback data, 
 
 void LinkLayer::loop() {
   if (t1_.expired()) {
-    if (retryCount_ >= config_.n2) {
+    if (config_.n2 != 0 && retryCount_ >= config_.n2) {
       LOG_PROTO("AX25 N2 exceeded, disconnecting");
       clearWindow();
       clearReceiveBuffer();
@@ -124,6 +125,22 @@ bool LinkLayer::sendConnected(const uint8_t* data, size_t len) {
   return true;
 }
 
+void LinkLayer::setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms) {
+  config_.t1Ms = t1Ms;
+  config_.t2Ms = t2Ms;
+  config_.t3Ms = t3Ms;
+}
+
+void LinkLayer::setRetryLimit(uint8_t n2) {
+  config_.n2 = n2;
+}
+
+void LinkLayer::setMaxFrame(uint8_t maxFrame) {
+  if (maxFrame == 0) maxFrame = 1;
+  if (maxFrame > WINDOW_SIZE) maxFrame = WINDOW_SIZE;
+  maxFrame_ = maxFrame;
+}
+
 bool LinkLayer::sendIFrame(const uint8_t* data, size_t len) {
   if (state_ != LinkState::Connected || windowFull() || peerBusy_ || data == nullptr || len == 0) {
     return false;
@@ -222,7 +239,7 @@ void LinkLayer::clearWindow() {
 }
 
 bool LinkLayer::windowFull() const {
-  return outstandingCount() >= WINDOW_SIZE;
+  return outstandingCount() >= maxFrame_;
 }
 
 bool LinkLayer::hasOutstanding() const {
@@ -304,7 +321,7 @@ bool LinkLayer::storeReceiveBuffered(const Frame& frame) {
 
 bool LinkLayer::inReceiveWindow(uint8_t nsValue) const {
   const uint8_t distance = seqDistance(vr_, nsValue);
-  return distance > 0 && distance < WINDOW_SIZE;
+  return distance > 0 && distance < maxFrame_;
 }
 
 void LinkLayer::deliverIFrame(const Frame& frame) {
