@@ -18,16 +18,16 @@ AXLoRaTNC is a real AX.25 packet-radio TNC for ESP32 + LoRa. AX.25 Level 2 frame
 
 ## LoRa defaults
 
-The `devkitv1_e22` defaults are stored in `src/variant/`. They can be overridden at runtime (see [Radio config](#radio-config)) and persist across reboots.
+The `devkitv1_e22` defaults are stored in `variants/devkitv1_e22/`. They can be overridden at runtime (see [Radio config](#radio-config)) and persist across reboots.
 
 | Parameter | Default |
 |---|---|
-| Frequency | 869.525 MHz |
+| Frequency | 869.480 MHz |
 | Bandwidth | 125 kHz |
 | Spreading factor | SF7 |
 | Coding rate | 4/5 |
 | Sync word | 0x12 |
-| TX power | 14 dBm |
+| TX power | 22 dBm |
 | AX.25 FCS | inside LoRa payload |
 | RadioLib packet CRC | enabled |
 
@@ -48,18 +48,28 @@ callsign PD4MV-0      → set and persist callsign
 
 ```text
 radio                         → show freq / bw / sf / cr / power + live RSSI/SNR
-radio freq 869.525            → set frequency (MHz)
+radio freq 869.480            → set frequency (MHz)
 radio bw   125                → set bandwidth (kHz)
 radio sf   7                  → set spreading factor (6–12)
 radio cr   5                  → set coding rate denominator (5–8, meaning 4/5…4/8)
-radio power 14                → set TX power (dBm)
+radio power 22                → set TX power (dBm)
+radio reset                   → restore variant defaults
 ```
 
 Changes are applied immediately and written to NVS.
 
 ### KISS parameters
 
-KISS TxDelay, persistence, SlotTime, and FullDuplex are set by the host over the KISS protocol. In half-duplex mode these drive the p-persistent CSMA algorithm inside `transmitRaw()`.
+KISS TxDelay, persistence, SlotTime, and FullDuplex are set by the host over the KISS protocol. In half-duplex mode these drive the p-persistent CSMA algorithm inside the non-blocking radio TX queue.
+
+For fast bench testing:
+
+```text
+profile fast      → txdelay=0, p=255, slot=1, fulldup=0, duty guard off
+profile normal    → txdelay=30, p=63, slot=10, fulldup=0, duty guard on
+```
+
+Use `profile fast` only on a dummy load or shielded lab setup.
 
 ### AX.25 connected mode
 
@@ -174,6 +184,22 @@ mode ded          → switch to WA8DED hostmode
 
 The mode is stored in NVS. In KISS and WA8DED modes, type `console` (plain text) to recover the console.
 
+### Duty Cycle
+
+The duty-cycle guard is enabled by default and stored in NVS.
+
+```text
+duty          → show current duty guard state
+duty on       → enable guard
+duty off      → disable guard for dummy-load/lab testing
+duty 10       → set 10% duty cycle
+duty 1        → set 1% duty cycle
+duty 0.1      → set 0.1% duty cycle
+profile fast  → fastest lab profile; disables duty guard
+```
+
+Use `duty off` only on a dummy load or shielded lab setup. On 869.480 MHz in EU/NL the normal guard should stay enabled.
+
 ---
 
 ## KISS
@@ -183,6 +209,8 @@ USB serial accepts standard KISS framing (`0xC0` FEND). KISS data frames are tre
 KISS parameter frames (TxDelay, Persistence, SlotTime, FullDuplex) are accepted and drive the CSMA algorithm.
 
 Compatible with: F6FBB, BPQ/LinBPQ, `kissattach`, Dire Wolf, APRS clients.
+
+For a working LinBPQ/BPQ32 setup, see [docs/BPQ.md](docs/BPQ.md). A complete example config is in [examples/bpq32-axloratnc.cfg](examples/bpq32-axloratnc.cfg).
 
 ---
 
@@ -237,7 +265,7 @@ APRS frames are AX.25 UI frames with PID `0xF0`. AXLoRaTNC decodes incoming APRS
 To send APRS position beacons, use the `beacon aprs` shortcut which sets the destination to `APRS` and formats the info field:
 
 ```text
-beacon aprs 52.0167 4.7000 /> LoRa TNC on 869.525 MHz
+beacon aprs 52.0167 4.7000 /> LoRa TNC on 869.480 MHz
 beacon interval 600
 beacon on
 ```

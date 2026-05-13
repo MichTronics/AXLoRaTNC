@@ -105,6 +105,14 @@ class Sx1276Driver final : public Driver {
     return radio_.setCodingRate(cr) == RADIOLIB_ERR_NONE ? Result::Ok : Result::HardwareError;
   }
 
+  void setDutyCycle(bool enabled, uint32_t dutyCyclePpm) override {
+    dutyCycleEnabled_ = enabled;
+    dutyCyclePpm_ = dutyCyclePpm == 0 ? variant::DUTY_CYCLE_PPM : dutyCyclePpm;
+  }
+
+  bool dutyCycleEnabled() const override { return dutyCycleEnabled_; }
+  uint32_t dutyCyclePpm() const override { return dutyCyclePpm_; }
+
   float getRSSI() override { return radio_.getRSSI(); }
   float getSNR() override { return radio_.getSNR(); }
   void sleep() override { radio_.sleep(); }
@@ -116,10 +124,13 @@ class Sx1276Driver final : public Driver {
   }
 
   bool canTransmit(uint32_t now) const {
+    if (!dutyCycleEnabled_) {
+      return true;
+    }
     if (lastTxMs_ == 0) {
       return true;
     }
-    const uint32_t minGap = (lastAirTimeMs_ * 1000000UL) / variant::DUTY_CYCLE_PPM;
+    const uint32_t minGap = (lastAirTimeMs_ * 1000000UL) / dutyCyclePpm_;
     return util::elapsed(now, lastTxMs_, minGap);
   }
 
@@ -130,6 +141,8 @@ class Sx1276Driver final : public Driver {
   SX1276 radio_{&module_};
   uint32_t lastTxMs_ = 0;
   uint32_t lastAirTimeMs_ = 0;
+  bool dutyCycleEnabled_ = true;
+  uint32_t dutyCyclePpm_ = variant::DUTY_CYCLE_PPM;
 };
 
 Sx1276Driver sx1276Driver;

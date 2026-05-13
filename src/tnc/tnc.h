@@ -126,12 +126,20 @@ class Tnc {
     uint32_t      lastHeardMs  = 0;
   };
 
+  struct PendingRawTx {
+    uint8_t  data[MAX_PACKET_BYTES]{};
+    size_t   len         = 0;
+    uint32_t notBeforeMs = 0;
+  };
+
   // Static LinkLayer callbacks
   static bool radioTxCallback(const uint8_t* data, size_t len, void* ctx);
   static void dataCallback(const uint8_t* data, size_t len, bool connected, void* ctx);
 
   // Radio helpers
   bool transmitRaw(const uint8_t* data, size_t len);
+  bool enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs);
+  void serviceRawTx(bool radioReady);
   void serviceRadio();
   int  findChannelForIncoming(const ax25::Frame& frame) const;
 
@@ -204,6 +212,8 @@ class Tnc {
   ax25::Address       local_{};
   char                savedCallsign_[12]{};
   radio::RadioConfig  radioConfig_{};
+  bool                dutyCycleEnabled_  = true;
+  uint32_t            dutyCyclePpm_      = variant::DUTY_CYCLE_PPM;
   bool                radioConfigApplied_ = false;
   uint32_t            lastRxMs_           = 0;
   ChannelCtx     channelCtx_[CHANNEL_COUNT]{};
@@ -238,6 +248,11 @@ class Tnc {
   float    lastSnr_          = 0.0f;
   uint32_t rawTx_           = 0;
   uint32_t rawRx_           = 0;
+  uint32_t rawTxQueued_     = 0;
+  uint32_t rawTxDeferred_   = 0;
+  uint32_t rawTxQueueDrops_ = 0;
+  uint32_t nextRawTxAttemptMs_ = 0;
+  axlora::util::RingBuffer<PendingRawTx, 16> rawTxQueue_;
   uint32_t beaconTx_        = 0;
   uint32_t beaconDrops_     = 0;
   uint32_t netromBroadcasts_  = 0;

@@ -49,6 +49,9 @@ class Driver {
   virtual Result setSpreadingFactor(uint8_t sf) = 0;
   virtual Result setBandwidth(float bandwidthKhz) = 0;
   virtual Result setCodingRate(uint8_t cr) = 0;
+  virtual void   setDutyCycle(bool enabled, uint32_t dutyCyclePpm) = 0;
+  virtual bool   dutyCycleEnabled() const = 0;
+  virtual uint32_t dutyCyclePpm() const = 0;
   virtual float  getRSSI() = 0;
   virtual float  getSNR() = 0;
   virtual void   sleep() = 0;

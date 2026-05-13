@@ -15,7 +15,7 @@ namespace {
 
 static void formatUptime(uint32_t ms, char* buf, size_t cap) {
   const uint32_t s = ms / 1000;
-  snprintf(buf, cap, "%02lu:%02lu:%02lu",
+  snprintf(buf, cap, "%lu:%02lu:%02lu",
            static_cast<unsigned long>(s / 3600),
            static_cast<unsigned long>((s % 3600) / 60),
            static_cast<unsigned long>(s % 60));
@@ -111,18 +111,21 @@ void Tnc::begin(const char* callsign) {
 
 void Tnc::loop(bool radioReady) {
   serviceSerial();
-  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
-    channels_[i].link.loop();
-  }
-  checkLinkStatusEvents();
   if (radioReady) {
     if (!radioConfigApplied_) {
       applyRadioConfig();
       radioConfigApplied_ = true;
     }
+    serviceRadio();
+  }
+  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
+    channels_[i].link.loop();
+  }
+  checkLinkStatusEvents();
+  if (radioReady) {
     serviceBeacon(radioReady);
     serviceNetrom(radioReady);
-    serviceRadio();
+    serviceRawTx(radioReady);
   }
 }
 
@@ -137,28 +140,69 @@ bool Tnc::isChannelBusy() const {
 }
 
 bool Tnc::transmitRaw(const uint8_t* data, size_t len) {
+  const uint32_t delayMs = (kissParams_.fullDuplex == 0)
+      ? static_cast<uint32_t>(kissParams_.txDelay) * 10
+      : 0;
+  return enqueueRawTx(data, len, delayMs);
+}
+
+bool Tnc::enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs) {
+  if (data == nullptr || len == 0 || len > MAX_PACKET_BYTES) {
+    ++rawTxQueueDrops_;
+    return false;
+  }
+
+  PendingRawTx tx{};
+  memcpy(tx.data, data, len);
+  tx.len = len;
+  tx.notBeforeMs = axlora::util::nowMs() + delayMs;
+
+  if (!rawTxQueue_.push(tx)) {
+    ++rawTxQueueDrops_;
+    LOG_WARN("radio tx queue full");
+    return false;
+  }
+  ++rawTxQueued_;
+  return true;
+}
+
+void Tnc::serviceRawTx(bool radioReady) {
+  if (!radioReady) return;
+  const uint32_t now = axlora::util::nowMs();
+  if (static_cast<int32_t>(now - nextRawTxAttemptMs_) < 0) return;
+
+  PendingRawTx tx{};
+  if (!rawTxQueue_.peek(tx)) return;
+  if (static_cast<int32_t>(now - tx.notBeforeMs) < 0) {
+    nextRawTxAttemptMs_ = tx.notBeforeMs;
+    return;
+  }
+
   if (kissParams_.fullDuplex == 0) {
-    // TxDelay
-    if (kissParams_.txDelay > 0) {
-      delay(static_cast<uint32_t>(kissParams_.txDelay) * 10);
-    }
-    // p-persistent CSMA: up to 8 attempts
     const uint32_t slotMs = static_cast<uint32_t>(kissParams_.slotTime) * 10;
-    for (int attempt = 0; attempt < 8; ++attempt) {
-      if (!isChannelBusy() &&
-          static_cast<uint8_t>(random(256)) <= kissParams_.persistence) {
-        break;
-      }
-      delay(slotMs < 10 ? 10 : slotMs);
+    if (isChannelBusy() ||
+        static_cast<uint8_t>(random(256)) > kissParams_.persistence) {
+      ++rawTxDeferred_;
+      nextRawTxAttemptMs_ = now + (slotMs < 10 ? 10 : slotMs);
+      return;
     }
   }
-  const radio::Result result = radio::driver().send(data, len);
+
+  const radio::Result result = radio::driver().send(tx.data, tx.len);
   if (result == radio::Result::Ok) {
+    rawTxQueue_.pop(tx);
     ++rawTx_;
-    return true;
+    nextRawTxAttemptMs_ = axlora::util::nowMs();
+    return;
+  }
+  if (result == radio::Result::Busy) {
+    ++rawTxDeferred_;
+    nextRawTxAttemptMs_ = axlora::util::nowMs() + 50;
+    return;
   }
   LOG_WARN("radio tx failed: %s", radio::resultName(result));
-  return false;
+  rawTxQueue_.pop(tx);
+  ++rawTxQueueDrops_;
 }
 
 bool Tnc::radioTxCallback(const uint8_t* data, size_t len, void* ctx) {
@@ -355,7 +399,9 @@ void Tnc::handleConsoleLine(char* line) {
 
   if (strcmp(cmd, "help") == 0) {
     Serial.println("Commands: help info callsign mode stats bbs");
-    Serial.println("          radio [freq|sf|bw|cr|power] [val]");
+    Serial.println("          radio [freq|sf|bw|cr|power|reset] [val]");
+    Serial.println("          duty [on|off|percent]");
+    Serial.println("          profile [fast|normal]");
     Serial.println("          ax25 connect [ch] <CALL> disconnect [ch]");
     Serial.println("          send [ch] <msg> sendui <DEST> <msg>");
     Serial.println("          beacon [on|off|now|text|dest|interval|path]");
@@ -419,6 +465,20 @@ void Tnc::handleConsoleLine(char* line) {
                     radioConfig_.powerDbm,
                     static_cast<double>(radio::driver().getRSSI()),
                     static_cast<double>(radio::driver().getSNR()));
+    } else if (strcmp(sub, "reset") == 0) {
+      radioConfig_.frequencyMHz    = variant::DEFAULT_FREQUENCY_MHZ;
+      radioConfig_.bandwidthKhz    = variant::DEFAULT_BANDWIDTH_KHZ;
+      radioConfig_.spreadingFactor = variant::DEFAULT_SPREADING_FACTOR;
+      radioConfig_.codingRate      = variant::DEFAULT_CODING_RATE;
+      radioConfig_.powerDbm        = variant::DEFAULT_TX_POWER_DBM;
+      applyRadioConfig();
+      radioConfigApplied_ = true;
+      saveRadioConfig();
+      Serial.printf("radio reset freq=%.3f bw=%.1f sf=%u cr=4/%u pwr=%d\n",
+                    static_cast<double>(radioConfig_.frequencyMHz),
+                    static_cast<double>(radioConfig_.bandwidthKhz),
+                    radioConfig_.spreadingFactor, radioConfig_.codingRate,
+                    radioConfig_.powerDbm);
     } else if (strcmp(sub, "freq") == 0) {
       char* val = strtok(nullptr, " ");
       if (!val) { Serial.println("usage: radio freq <MHz>"); }
@@ -467,7 +527,69 @@ void Tnc::handleConsoleLine(char* line) {
         Serial.printf("pwr=%d dBm\n", radioConfig_.powerDbm);
       }
     } else {
-      Serial.println("usage: radio [freq|sf|bw|cr|power] [value]");
+      Serial.println("usage: radio [freq|sf|bw|cr|power|reset] [value]");
+    }
+
+  } else if (strcmp(cmd, "duty") == 0) {
+    char* arg = strtok(nullptr, " ");
+    if (arg == nullptr) {
+      Serial.printf("duty=%s %.3f%% drops=%lu\n",
+                    dutyCycleEnabled_ ? "on" : "off",
+                    static_cast<double>(dutyCyclePpm_) / 10000.0,
+                    static_cast<unsigned long>(radio::stats().dutyDrops));
+    } else if (strcmp(arg, "on") == 0) {
+      dutyCycleEnabled_ = true;
+      radio::driver().setDutyCycle(dutyCycleEnabled_, dutyCyclePpm_);
+      saveRadioConfig();
+      Serial.printf("duty=on %.3f%%\n", static_cast<double>(dutyCyclePpm_) / 10000.0);
+    } else if (strcmp(arg, "off") == 0) {
+      dutyCycleEnabled_ = false;
+      radio::driver().setDutyCycle(false, dutyCyclePpm_);
+      saveRadioConfig();
+      Serial.println("WARNING: duty-cycle guard is OFF. Use only on dummy load/lab setups.");
+    } else {
+      const float percent = static_cast<float>(atof(arg));
+      if (percent <= 0.0f || percent > 100.0f) {
+        Serial.println("usage: duty [on|off|percent]");
+      } else {
+        dutyCyclePpm_ = static_cast<uint32_t>(percent * 10000.0f);
+        dutyCycleEnabled_ = true;
+        radio::driver().setDutyCycle(true, dutyCyclePpm_);
+        saveRadioConfig();
+        Serial.printf("duty=on %.3f%%\n", static_cast<double>(dutyCyclePpm_) / 10000.0);
+      }
+    }
+
+  } else if (strcmp(cmd, "profile") == 0) {
+    char* arg = strtok(nullptr, " ");
+    if (arg == nullptr) {
+      Serial.printf("profile custom duty=%s txdelay=%u p=%u slot=%u fulldup=%u\n",
+                    dutyCycleEnabled_ ? "on" : "off",
+                    kissParams_.txDelay, kissParams_.persistence,
+                    kissParams_.slotTime, kissParams_.fullDuplex);
+    } else if (strcmp(arg, "fast") == 0) {
+      kissParams_.txDelay    = 0;
+      kissParams_.persistence = 255;
+      kissParams_.slotTime   = 1;
+      kissParams_.fullDuplex = 0;
+      dutyCycleEnabled_ = false;
+      radio::driver().setDutyCycle(false, dutyCyclePpm_);
+      saveRadioConfig();
+      Serial.println("profile=fast txdelay=0 p=255 slot=1 fulldup=0 duty=off");
+      Serial.println("WARNING: fast profile disables duty-cycle guard. Use only on dummy load/lab setups.");
+    } else if (strcmp(arg, "normal") == 0 || strcmp(arg, "default") == 0) {
+      kissParams_.txDelay    = 30;
+      kissParams_.persistence = 63;
+      kissParams_.slotTime   = 10;
+      kissParams_.fullDuplex = 0;
+      dutyCycleEnabled_ = true;
+      dutyCyclePpm_ = variant::DUTY_CYCLE_PPM;
+      radio::driver().setDutyCycle(true, dutyCyclePpm_);
+      saveRadioConfig();
+      Serial.printf("profile=normal txdelay=30 p=63 slot=10 fulldup=0 duty=%.3f%%\n",
+                    static_cast<double>(dutyCyclePpm_) / 10000.0);
+    } else {
+      Serial.println("usage: profile [fast|normal]");
     }
 
   } else if (strcmp(cmd, "ax25") == 0) {
@@ -692,13 +814,19 @@ void Tnc::printInfo() const {
                 static_cast<double>(radioConfig_.bandwidthKhz),
                 radioConfig_.spreadingFactor, radioConfig_.codingRate,
                 radioConfig_.powerDbm);
+  Serial.printf("  duty=%s %.3f%%\n", dutyCycleEnabled_ ? "on" : "off",
+                static_cast<double>(dutyCyclePpm_) / 10000.0);
   Serial.printf("serial mode=%s channels=%u\n", serialModeName(), static_cast<unsigned>(CHANNEL_COUNT));
 }
 
 void Tnc::printStats() const {
   const radio::Stats& rs = radio::stats();
-  Serial.printf("tnc raw_tx=%lu raw_rx=%lu kiss_txdelay=%u p=%u slot=%u fulldup=%u\n",
+  Serial.printf("tnc raw_tx=%lu raw_rx=%lu txq=%u queued=%lu deferred=%lu qdrops=%lu kiss_txdelay=%u p=%u slot=%u fulldup=%u\n",
                 static_cast<unsigned long>(rawTx_), static_cast<unsigned long>(rawRx_),
+                static_cast<unsigned>(rawTxQueue_.size()),
+                static_cast<unsigned long>(rawTxQueued_),
+                static_cast<unsigned long>(rawTxDeferred_),
+                static_cast<unsigned long>(rawTxQueueDrops_),
                 kissParams_.txDelay, kissParams_.persistence, kissParams_.slotTime, kissParams_.fullDuplex);
   Serial.printf("digi enabled=%u tx=%lu dupes=%lu drops=%lu\n",
                 digi_.enabled,
@@ -714,10 +842,12 @@ void Tnc::printStats() const {
                 netrom_.enabled, netrom_.alias,
                 static_cast<unsigned long>(netromBroadcasts_),
                 static_cast<unsigned long>(netromRoutesHeard_));
-  Serial.printf("radio tx_ok=%lu tx_fail=%lu rx_ok=%lu rx_fail=%lu duty_drops=%lu\n",
+  Serial.printf("radio tx_ok=%lu tx_fail=%lu rx_ok=%lu rx_fail=%lu duty_drops=%lu duty=%s %.3f%%\n",
                 static_cast<unsigned long>(rs.txOk), static_cast<unsigned long>(rs.txFail),
                 static_cast<unsigned long>(rs.rxOk), static_cast<unsigned long>(rs.rxFail),
-                static_cast<unsigned long>(rs.dutyDrops));
+                static_cast<unsigned long>(rs.dutyDrops),
+                dutyCycleEnabled_ ? "on" : "off",
+                static_cast<double>(dutyCyclePpm_) / 10000.0);
   for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
     if (channels_[i].link.state() != ax25::LinkState::Disconnected) {
       Serial.printf("ch%u: ", static_cast<unsigned>(i + 1));
@@ -1225,8 +1355,7 @@ bool Tnc::maybeDigipeat(const ax25::Frame& frame) {
   uint8_t bytes[MAX_PACKET_BYTES]{};
   size_t len = 0;
   if (!ax25::encodeFrame(repeated, bytes, sizeof(bytes), len, true)) { ++digiDrops_; return false; }
-  const radio::Result result = radio::driver().send(bytes, len);
-  if (result != radio::Result::Ok) { ++digiDrops_; return false; }
+  if (!transmitRaw(bytes, len)) { ++digiDrops_; return false; }
   ++digiTx_;
   return true;
 }
@@ -1331,7 +1460,7 @@ void Tnc::printMheard() const {
   for (const MheardEntry& entry : mheard_) {
     if (!entry.active) continue;
     char source[12]{}, destination[12]{};
-    char first[10]{}, last[10]{};
+    char first[12]{}, last[12]{};
     ax25::formatAddress(entry.source,      source,      sizeof(source));
     ax25::formatAddress(entry.destination, destination, sizeof(destination));
     formatUptime(entry.firstHeardMs, first, sizeof(first));
@@ -1367,8 +1496,7 @@ bool Tnc::sendBeacon() {
   uint8_t bytes[MAX_PACKET_BYTES]{};
   size_t len = 0;
   if (!ax25::encodeFrame(frame, bytes, sizeof(bytes), len, true)) { ++beaconDrops_; return false; }
-  const radio::Result result = radio::driver().send(bytes, len);
-  if (result != radio::Result::Ok) { ++beaconDrops_; return false; }
+  if (!transmitRaw(bytes, len)) { ++beaconDrops_; return false; }
   ++beaconTx_;
   return true;
 }
@@ -1466,8 +1594,7 @@ bool Tnc::sendNetromBroadcast() {
   uint8_t bytes[MAX_PACKET_BYTES]{};
   size_t len = 0;
   if (!ax25::encodeFrame(frame, bytes, sizeof(bytes), len, true)) return false;
-  const radio::Result result = radio::driver().send(bytes, len);
-  if (result != radio::Result::Ok) return false;
+  if (!transmitRaw(bytes, len)) return false;
   ++netromBroadcasts_;
   return true;
 }
@@ -1551,6 +1678,8 @@ void Tnc::loadSettings() {
     radioConfig_.spreadingFactor = prefs.getUChar("r_sf",   variant::DEFAULT_SPREADING_FACTOR);
     radioConfig_.codingRate      = prefs.getUChar("r_cr",   variant::DEFAULT_CODING_RATE);
     radioConfig_.powerDbm        = static_cast<int8_t>(prefs.getChar("r_pwr", variant::DEFAULT_TX_POWER_DBM));
+    dutyCycleEnabled_            = prefs.getBool("duty_en", true);
+    dutyCyclePpm_                = prefs.getULong("duty_ppm", variant::DUTY_CYCLE_PPM);
     serialMode_ = static_cast<SerialMode>(
         prefs.getUChar("mode", static_cast<uint8_t>(SerialMode::Console)));
     digi_.enabled  = prefs.getBool("digi_en",       digi_.enabled);
@@ -1620,11 +1749,14 @@ void Tnc::saveRadioConfig() {
   prefs.putUChar("r_sf",   radioConfig_.spreadingFactor);
   prefs.putUChar("r_cr",   radioConfig_.codingRate);
   prefs.putChar("r_pwr",   radioConfig_.powerDbm);
+  prefs.putBool("duty_en", dutyCycleEnabled_);
+  prefs.putULong("duty_ppm", dutyCyclePpm_);
   prefs.end();
 }
 
 void Tnc::applyRadioConfig() {
   auto& drv = radio::driver();
+  drv.setDutyCycle(dutyCycleEnabled_, dutyCyclePpm_);
   drv.setFrequency(radioConfig_.frequencyMHz);
   drv.setSpreadingFactor(radioConfig_.spreadingFactor);
   drv.setBandwidth(radioConfig_.bandwidthKhz);
