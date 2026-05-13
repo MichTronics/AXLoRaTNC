@@ -33,6 +33,8 @@ struct L2Stats {
   uint32_t iTx = 0;
   uint32_t retries = 0;
   uint32_t rejTx = 0;
+  uint32_t srejTx = 0;
+  uint32_t srejRx = 0;
   uint32_t fcsDrops = 0;
   uint32_t stateChanges = 0;
   uint32_t queued = 0;
@@ -67,6 +69,10 @@ class LinkLayer {
     bool active = false;
     Frame frame{};
   };
+  struct ReceiveSlot {
+    bool active = false;
+    Frame frame{};
+  };
 
   void setState(LinkState state);
   bool transmit(const Frame& frame, bool remember);
@@ -78,7 +84,15 @@ class LinkLayer {
   bool hasOutstanding() const;
   uint8_t outstandingCount() const;
   void retransmitWindow();
+  bool retransmitOne(uint8_t nsValue);
   void storeOutstanding(const Frame& frame);
+  void clearReceiveBuffer();
+  bool receiveBuffered(uint8_t nsValue, Frame& out);
+  bool storeReceiveBuffered(const Frame& frame);
+  bool inReceiveWindow(uint8_t nsValue) const;
+  void deliverIFrame(const Frame& frame);
+  void deferAck();
+  bool sendSupervisoryNr(SFrameType type, uint8_t nrValue, bool poll = false);
   bool sendSupervisory(SFrameType type, bool poll = false);
   bool sendUnnumbered(UFrameType type);
   void handleI(const Frame& frame);
@@ -101,6 +115,8 @@ class LinkLayer {
   bool peerBusy_ = false;
   static constexpr uint8_t WINDOW_SIZE = 4;
   WindowSlot window_[WINDOW_SIZE]{};
+  ReceiveSlot receiveWindow_[WINDOW_SIZE]{};
+  bool srejPending_[8]{};
   Timer t1_;
   Timer t2_;
   Timer t3_;

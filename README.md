@@ -303,7 +303,7 @@ RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` has n
 - Callsign + SSID address encoding / decoding
 - Destination, source, repeater address fields
 - C/R (command/response) bit per AX.25 2.2 spec
-- UI, I, S (RR, RNR, REJ), U (SABM, UA, DISC, DM) frames
+- UI, I, S (RR, RNR, REJ, SREJ), U (SABM, UA, DISC, DM) frames
 - AX.25 CRC-16 FCS; RadioLib packet CRC additionally enabled
 - Modulo-8 sequence numbers, window size 4
 
@@ -311,7 +311,8 @@ RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` has n
 - Full state machine: Disconnected → Connecting → Connected → Disconnecting / Recovery
 - T1 retry timer, T2 deferred-ack timer, T3 keepalive timer
 - N2 retry limit with automatic Recovery state on T1 timeout
-- Sliding window with selective retransmit after REJ
+- Sliding window with retransmit after REJ and single-frame selective retransmit after SREJ
+- Receive-side SREJ with short out-of-sequence frame buffering
 - RNR / peer-busy flow control
 - TX queue per channel (depth 6); data sent from queue after ack
 

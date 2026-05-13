@@ -5,6 +5,14 @@
 
 namespace axlora::ax25 {
 
+namespace {
+
+uint8_t seqDistance(uint8_t from, uint8_t to) {
+  return static_cast<uint8_t>((to - from) & 0x07);
+}
+
+}  // namespace
+
 void LinkLayer::begin(const L2Config& config, TxCallback tx, DataCallback data, void* ctx) {
   config_ = config;
   tx_ = tx;
@@ -18,6 +26,7 @@ void LinkLayer::loop() {
     if (retryCount_ >= config_.n2) {
       LOG_PROTO("AX25 N2 exceeded, disconnecting");
       clearWindow();
+      clearReceiveBuffer();
       txQueue_.clear();
       peerBusy_ = false;
       t1_.stop();
@@ -77,6 +86,7 @@ bool LinkLayer::connectTo(const Address& destination) {
   peerBusy_ = false;
   t2_.stop();
   t2PendingAck_ = false;
+  clearReceiveBuffer();
   txQueue_.clear();
   setState(LinkState::Connecting);
   return sendUnnumbered(UFrameType::SABM);
@@ -90,6 +100,7 @@ bool LinkLayer::disconnect() {
   txQueue_.clear();
   t2_.stop();
   t2PendingAck_ = false;
+  clearReceiveBuffer();
   setState(LinkState::Disconnecting);
   return sendUnnumbered(UFrameType::DISC);
 }
@@ -236,6 +247,15 @@ void LinkLayer::retransmitWindow() {
   }
 }
 
+bool LinkLayer::retransmitOne(uint8_t nsValue) {
+  for (const WindowSlot& slot : window_) {
+    if (slot.active && ns(slot.frame.control) == nsValue) {
+      return transmit(slot.frame, false);
+    }
+  }
+  return false;
+}
+
 void LinkLayer::storeOutstanding(const Frame& frame) {
   for (WindowSlot& slot : window_) {
     if (!slot.active) {
@@ -246,13 +266,74 @@ void LinkLayer::storeOutstanding(const Frame& frame) {
   }
 }
 
-bool LinkLayer::sendSupervisory(SFrameType type, bool poll) {
+void LinkLayer::clearReceiveBuffer() {
+  for (ReceiveSlot& slot : receiveWindow_) {
+    slot.active = false;
+  }
+  for (bool& pending : srejPending_) {
+    pending = false;
+  }
+}
+
+bool LinkLayer::receiveBuffered(uint8_t nsValue, Frame& out) {
+  for (ReceiveSlot& slot : receiveWindow_) {
+    if (slot.active && ns(slot.frame.control) == nsValue) {
+      out = slot.frame;
+      slot.active = false;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool LinkLayer::storeReceiveBuffered(const Frame& frame) {
+  for (ReceiveSlot& slot : receiveWindow_) {
+    if (slot.active && ns(slot.frame.control) == ns(frame.control)) {
+      return true;
+    }
+  }
+  for (ReceiveSlot& slot : receiveWindow_) {
+    if (!slot.active) {
+      slot.active = true;
+      slot.frame = frame;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool LinkLayer::inReceiveWindow(uint8_t nsValue) const {
+  const uint8_t distance = seqDistance(vr_, nsValue);
+  return distance > 0 && distance < WINDOW_SIZE;
+}
+
+void LinkLayer::deliverIFrame(const Frame& frame) {
+  srejPending_[ns(frame.control)] = false;
+  vr_ = static_cast<uint8_t>((vr_ + 1) & 0x07);
+  ++stats_.iRx;
+  if (data_ != nullptr) {
+    data_(frame.info, frame.infoLen, true, ctx_);
+  }
+}
+
+void LinkLayer::deferAck() {
+  if (!t2PendingAck_) {
+    t2PendingAck_ = true;
+    t2_.start(config_.t2Ms);
+  }
+}
+
+bool LinkLayer::sendSupervisoryNr(SFrameType type, uint8_t nrValue, bool poll) {
   Frame frame{};
   frame.destination = peer_;
   frame.source = config_.local;
   frame.command = poll;   // poll=true → command, poll=false → response
-  frame.control = makeS(type, vr_, poll);
+  frame.control = makeS(type, nrValue, poll);
   return transmit(frame, false);
+}
+
+bool LinkLayer::sendSupervisory(SFrameType type, bool poll) {
+  return sendSupervisoryNr(type, vr_, poll);
 }
 
 bool LinkLayer::sendUnnumbered(UFrameType type) {
@@ -282,15 +363,18 @@ void LinkLayer::handleI(const Frame& frame) {
   }
   processAck(nr(frame.control));
   if (ns(frame.control) == vr_) {
-    vr_ = static_cast<uint8_t>((vr_ + 1) & 0x07);
-    ++stats_.iRx;
-    if (data_ != nullptr) {
-      data_(frame.info, frame.infoLen, true, ctx_);
+    deliverIFrame(frame);
+    Frame buffered{};
+    while (receiveBuffered(vr_, buffered)) {
+      deliverIFrame(buffered);
     }
-    // T2: defer RR ack to allow piggybacking on an outgoing I-frame
-    if (!t2PendingAck_) {
-      t2PendingAck_ = true;
-      t2_.start(config_.t2Ms);
+    deferAck();
+  } else if (inReceiveWindow(ns(frame.control)) && storeReceiveBuffered(frame)) {
+    LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending SREJ", ns(frame.control), vr_);
+    if (!srejPending_[vr_]) {
+      srejPending_[vr_] = true;
+      ++stats_.srejTx;
+      sendSupervisoryNr(SFrameType::SREJ, vr_);
     }
   } else {
     LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending REJ", ns(frame.control), vr_);
@@ -352,6 +436,14 @@ void LinkLayer::handleS(const Frame& frame) {
         t1_.start(config_.t1Ms);
       }
       break;
+    case SFrameType::SREJ:
+      peerBusy_ = false;
+      ++stats_.srejRx;
+      LOG_PROTO("AX25 SREJ received for NS=%u", nr(frame.control));
+      if (retransmitOne(nr(frame.control))) {
+        t1_.start(config_.t1Ms);
+      }
+      break;
     default:
       break;
   }
@@ -375,6 +467,7 @@ void LinkLayer::handleU(const Frame& frame) {
     t2_.stop();
     t2PendingAck_ = false;
     clearWindow();
+    clearReceiveBuffer();
     txQueue_.clear();
     t1_.stop();
     setState(LinkState::Connected);
@@ -394,6 +487,7 @@ void LinkLayer::handleU(const Frame& frame) {
       t2_.stop();
       t2PendingAck_ = false;
       clearWindow();
+      clearReceiveBuffer();
       txQueue_.clear();
       setState(LinkState::Disconnected);
     }
@@ -403,6 +497,7 @@ void LinkLayer::handleU(const Frame& frame) {
     peer_ = frame.source;
     sendUnnumbered(UFrameType::UA);
     clearWindow();
+    clearReceiveBuffer();
     txQueue_.clear();
     t1_.stop();
     setState(LinkState::Disconnected);
@@ -410,6 +505,7 @@ void LinkLayer::handleU(const Frame& frame) {
   }
   if (type == UFrameType::DM) {
     clearWindow();
+    clearReceiveBuffer();
     txQueue_.clear();
     t1_.stop();
     t2_.stop();
@@ -452,7 +548,7 @@ bool LinkLayer::addressedToLocal(const Frame& frame) const {
 }
 
 void LinkLayer::printStats() const {
-  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu queued=%lu q_depth=%u q_drops=%lu retries=%lu rej_tx=%lu fcs_drops=%lu\n",
+  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu queued=%lu q_depth=%u q_drops=%lu retries=%lu rej_tx=%lu srej_tx=%lu srej_rx=%lu fcs_drops=%lu\n",
                 stateName(state_),
                 static_cast<unsigned long>(stats_.uiTx),
                 static_cast<unsigned long>(stats_.uiRx),
@@ -463,6 +559,8 @@ void LinkLayer::printStats() const {
                 static_cast<unsigned long>(stats_.queueDrops),
                 static_cast<unsigned long>(stats_.retries),
                 static_cast<unsigned long>(stats_.rejTx),
+                static_cast<unsigned long>(stats_.srejTx),
+                static_cast<unsigned long>(stats_.srejRx),
                 static_cast<unsigned long>(stats_.fcsDrops));
 }
 

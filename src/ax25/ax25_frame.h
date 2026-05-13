@@ -26,6 +26,7 @@ enum class SFrameType : uint8_t {
   RR = 0,
   RNR = 1,
   REJ = 2,
+  SREJ = 3,
 };
 
 enum class UFrameType : uint8_t {
