@@ -146,6 +146,12 @@ main {
   font-size: 0.78rem;
 }
 
+.board-untested {
+  font-size: 0.72rem;
+  color: #e3b341;
+  margin-top: 0.3rem;
+}
+
 /* ── Flash row ────────────────────────────────────────── */
 .hint {
   color: var(--muted);
