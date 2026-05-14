@@ -1,6 +1,6 @@
 {
   "name": "AXLoRaTNC \u2013 ESP32 DevKit V1 + EBYTE E22 (SX1262)",
-  "version": "dev-53f0e5f",
+  "version": "dev-5dd6c20",
   "new_install_prompt_erase": true,
   "builds": [
     {
