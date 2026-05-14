@@ -157,9 +157,18 @@ jobs:
           npm run build
 
       # ── Get current gh-pages state (partial-update pattern) ──────────────
+      # Check first to avoid actions/checkout's 3-retry delay on a missing branch.
+      - name: Check if gh-pages branch exists
+        id: branch_check
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
+            echo "exists=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout gh-pages branch
-        id: checkout_pages
-        continue-on-error: true
+        if: steps.branch_check.outputs.exists == 'true'
         uses: actions/checkout@v4
         with:
           ref: gh-pages
@@ -167,9 +176,8 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Branch does not exist yet on the first ever deploy.
-      - name: Initialise empty _site if gh-pages is missing
-        if: steps.checkout_pages.outcome == 'failure'
+      - name: Initialise empty _site on first deploy
+        if: steps.branch_check.outputs.exists == 'false'
         run: mkdir -p _site
 
       # ── Assemble site ─────────────────────────────────────────────────────
