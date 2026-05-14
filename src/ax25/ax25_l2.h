@@ -70,7 +70,9 @@ class LinkLayer {
   void printStatus() const;
   LinkState state() const { return state_; }
   const Address& peer() const { return peer_; }
+  const Address& local() const { return config_.local; }
   const L2Stats& stats() const { return stats_; }
+  bool setLocalAddress(const Address& local);
 
  private:
   struct QueuedInfo {

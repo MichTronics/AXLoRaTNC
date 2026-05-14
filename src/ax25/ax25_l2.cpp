@@ -152,6 +152,28 @@ void LinkLayer::setMaxFrame(uint8_t maxFrame) {
   maxFrame_ = maxFrame;
 }
 
+bool LinkLayer::setLocalAddress(const Address& local) {
+  if (state_ != LinkState::Disconnected) {
+    return false;
+  }
+  config_.local = local;
+  peer_ = Address{};
+  vs_ = 0;
+  va_ = 0;
+  vr_ = 0;
+  retryCount_ = 0;
+  peerBusy_ = false;
+  t1_.stop();
+  t2_.stop();
+  t3_.stop();
+  t4_.stop();
+  t2PendingAck_ = false;
+  clearWindow();
+  clearReceiveBuffer();
+  txQueue_.clear();
+  return true;
+}
+
 bool LinkLayer::sendIFrame(const uint8_t* data, size_t len) {
   if (state_ != LinkState::Connected || windowFull() || peerBusy_ || data == nullptr || len == 0) {
     return false;

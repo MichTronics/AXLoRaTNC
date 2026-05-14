@@ -172,6 +172,7 @@ class Tnc {
   void sendDedText(uint8_t channel, uint8_t code, const char* text);
   void sendDedCounted(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   bool enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
+  size_t pendingDedEvents(uint8_t channel, uint8_t wanted = 0);
   bool popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out);
   void checkLinkStatusEvents();
 
@@ -214,7 +215,9 @@ class Tnc {
   void saveSettings();
   void saveDedConfig();
   void saveRadioConfig();
+  void beginLink(uint8_t chIdx, const ax25::Address& local);
   void resetLinksForLocal();
+  bool setChannelLocal(uint8_t chIdx, const ax25::Address& local);
   void applyRadioConfig();
   void saveSerialMode(SerialMode mode);
   void setSerialMode(SerialMode mode);
@@ -282,6 +285,10 @@ class Tnc {
   ax25::Address dedUnprotoDestination_{};
   char    dedMonitorMode_[20]  = "IU";
   char    dedUnattendedText_[80]{};
+  char    dedLastCallsign_[12]{};
+  uint8_t dedLastCallsignChannel_ = 0;
+  char    dedLastConnect_[12]{};
+  uint8_t dedLastConnectChannel_ = 0;
 
   DigipeaterConfig digi_{};
   DigiCacheEntry   digiCache_[16]{};

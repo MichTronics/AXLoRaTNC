@@ -16,7 +16,7 @@ static constexpr uint8_t kOledRst = static_cast<uint8_t>(
 // SSD1306 128×64 full-buffer hardware I2C. Change to SH1106 if you have that chip.
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, kOledRst);
 
-static constexpr uint8_t PAGE_COUNT       = 5;
+static constexpr uint8_t PAGE_COUNT       = 6;
 static constexpr uint8_t PAGE_DWELL_TICKS = 4;  // calls to update() per page (= 4 s)
 static uint8_t sPage  = 0;
 static uint8_t sTicks = 0;
@@ -112,7 +112,39 @@ void drawPageConfig(const axlora::display::DisplayInfo& info) {
   u8g2.drawStr(0, 61, buf);
 }
 
-// ---- Page 3: AX.25 protocol stats ----
+// ---- Page 3: WA8DED host status ----
+void drawPageDed(const axlora::display::DisplayInfo& info) {
+  char buf[24]{};
+  drawHeader(info);
+
+  snprintf(buf, sizeof(buf), "HOST:%-3s SEL:%u",
+           info.dedHostMode ? "ON" : "OFF",
+           info.dedSelectedChannel);
+  u8g2.drawStr(0, 25, buf);
+
+  snprintf(buf, sizeof(buf), "MYCALL:%s", info.callsign);
+  u8g2.drawStr(0, 37, buf);
+
+  if (info.dedLastCallsign[0] != '\0') {
+    snprintf(buf, sizeof(buf), "I ch%u: %s",
+             info.dedLastCallsignChannel,
+             info.dedLastCallsign);
+  } else {
+    strncpy(buf, "I ch-: ---", sizeof(buf) - 1);
+  }
+  u8g2.drawStr(0, 49, buf);
+
+  if (info.dedLastConnect[0] != '\0') {
+    snprintf(buf, sizeof(buf), "C ch%u: %s",
+             info.dedLastConnectChannel,
+             info.dedLastConnect);
+  } else {
+    strncpy(buf, "C ch-: ---", sizeof(buf) - 1);
+  }
+  u8g2.drawStr(0, 61, buf);
+}
+
+// ---- Page 4: AX.25 protocol stats ----
 void drawPageStats(const axlora::display::DisplayInfo& info) {
   char buf[24]{};
   drawHeader(info);
@@ -141,7 +173,7 @@ void drawPageStats(const axlora::display::DisplayInfo& info) {
   u8g2.drawStr(0, 61, buf);
 }
 
-// ---- Page 4: Heard stations ----
+// ---- Page 5: Heard stations ----
 void drawPageMheard(const axlora::display::DisplayInfo& info) {
   char buf[24]{};
   drawHeader(info);
@@ -168,7 +200,7 @@ void drawPageMheard(const axlora::display::DisplayInfo& info) {
   }
 }
 
-// ---- Page 5: Services status ----
+// ---- Page 6: Services status ----
 void drawPageServices(const axlora::display::DisplayInfo& info) {
   char buf[24]{};
   drawHeader(info);
@@ -237,9 +269,10 @@ void update(const DisplayInfo& info) {
   switch (sPage) {
     case 0: drawPageRadio(info);    break;
     case 1: drawPageConfig(info);   break;
-    case 2: drawPageStats(info);    break;
-    case 3: drawPageMheard(info);   break;
-    case 4: drawPageServices(info); break;
+    case 2: drawPageDed(info);      break;
+    case 3: drawPageStats(info);    break;
+    case 4: drawPageMheard(info);   break;
+    case 5: drawPageServices(info); break;
     default: drawPageRadio(info);   break;
   }
 

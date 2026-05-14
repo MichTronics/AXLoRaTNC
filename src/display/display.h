@@ -36,6 +36,12 @@ struct DisplayInfo {
   uint8_t  codingRate   = 5;
   uint32_t baudKiss     = 9600;
   uint32_t baudDed      = 9600;
+  bool     dedHostMode  = false;
+  uint8_t  dedSelectedChannel = 0;
+  uint8_t  dedLastCallsignChannel = 0;
+  char     dedLastCallsign[12]{};
+  uint8_t  dedLastConnectChannel = 0;
+  char     dedLastConnect[12]{};
 
   // ---- page 3: AX.25 protocol stats (aggregated across channels) ----
   uint32_t l2Retries    = 0;

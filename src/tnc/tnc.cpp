@@ -29,6 +29,27 @@ bool textToAddress(const char* text, ax25::Address& out) {
   return text != nullptr && text[0] != '\0' && ax25::parseAddress(text, out);
 }
 
+static uint8_t sanitizeNodeTextByte(uint8_t byte) {
+  if (byte == '\r' || byte == '\n' || byte == '\t') return byte;
+  if (byte >= 0x20 && byte <= 0x7E) return byte;
+  return '?';
+}
+
+static bool isNodeInputTextByte(uint8_t byte) {
+  return byte == '\t' || (byte >= 0x20 && byte <= 0x7E);
+}
+
+static void copySanitizedNodeText(char* dst, size_t dstCap, const char* src) {
+  if (dst == nullptr || dstCap == 0) return;
+  size_t pos = 0;
+  if (src != nullptr) {
+    while (*src != '\0' && pos + 1 < dstCap) {
+      dst[pos++] = static_cast<char>(sanitizeNodeTextByte(static_cast<uint8_t>(*src++)));
+    }
+  }
+  dst[pos] = '\0';
+}
+
 bool isUiFrame(const ax25::Frame& frame) {
   return ax25::kind(frame.control) == ax25::FrameKind::U &&
          ax25::uType(frame.control) == ax25::UFrameType::UI;
@@ -86,6 +107,29 @@ static bool parseByteValue(const char* s, uint8_t& out) {
   return true;
 }
 
+static bool parseDedConnectAddress(const char* text, ax25::Address& out) {
+  text = skipSpaces(text);
+  if (text == nullptr || *text == '\0') return false;
+  const char* call = text;
+  const char* colon = strchr(text, ':');
+  const char* space = strchr(text, ' ');
+  if (colon != nullptr && (space == nullptr || colon < space)) {
+    call = colon + 1;
+  }
+  char first[16]{};
+  size_t i = 0;
+  while (call[i] != '\0' && call[i] != ' ' && i < sizeof(first) - 1) {
+    first[i] = call[i];
+    ++i;
+  }
+  return ax25::parseAddress(first, out);
+}
+
+static void copyFormattedAddress(const ax25::Address& address, char* out, size_t cap) {
+  ax25::formatAddress(address, out, cap);
+  if (cap > 0) out[cap - 1] = '\0';
+}
+
 static void formatByteParam(char prefix, uint8_t value, char* out, size_t cap) {
   snprintf(out, cap, "%c %u", prefix, static_cast<unsigned>(value));
 }
@@ -114,6 +158,7 @@ void Tnc::begin(const char* callsign) {
   if (!ax25::parseAddress(cs, local_)) {
     ax25::parseAddress("N0CALL", local_);
   }
+  ax25::formatAddress(local_, dedLastCallsign_, sizeof(dedLastCallsign_));
   if (beacon_.destination.callsign[0] == '\0') {
     ax25::parseAddress("CQ", beacon_.destination);
   }
@@ -130,31 +175,34 @@ void Tnc::begin(const char* callsign) {
   if (netrom_.ident[0] == '\0') {
     strncpy(netrom_.ident, "AXLoRaTNC NET/ROM node", sizeof(netrom_.ident) - 1);
   }
-  ax25::L2Config config{};
-  config.local = local_;
-  config.t1Ms = static_cast<uint32_t>(dedFrack_) * 10UL;
-  config.t2Ms = static_cast<uint32_t>(dedT2_) * 10UL;
-  config.t3Ms = static_cast<uint32_t>(dedT3_) * 10UL;
-  config.n2 = dedRetryLimit_;
   for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
     channelCtx_[i].tnc   = this;
     channelCtx_[i].chIdx = i;
-    channels_[i].link.begin(config, radioTxCallback, dataCallback, &channelCtx_[i]);
-    channels_[i].link.setMaxFrame(dedMaxFrame_);
+    beginLink(i, local_);
   }
 }
 
-void Tnc::resetLinksForLocal() {
+void Tnc::beginLink(uint8_t chIdx, const ax25::Address& local) {
+  if (chIdx >= CHANNEL_COUNT) return;
   ax25::L2Config cfg{};
-  cfg.local = local_;
+  cfg.local = local;
   cfg.t1Ms = static_cast<uint32_t>(dedFrack_) * 10UL;
   cfg.t2Ms = static_cast<uint32_t>(dedT2_) * 10UL;
   cfg.t3Ms = static_cast<uint32_t>(dedT3_) * 10UL;
   cfg.n2 = dedRetryLimit_;
+  channels_[chIdx].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[chIdx]);
+  channels_[chIdx].link.setMaxFrame(dedMaxFrame_);
+}
+
+void Tnc::resetLinksForLocal() {
   for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
-    channels_[i].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[i]);
-    channels_[i].link.setMaxFrame(dedMaxFrame_);
+    beginLink(i, local_);
   }
+}
+
+bool Tnc::setChannelLocal(uint8_t chIdx, const ax25::Address& local) {
+  if (chIdx >= CHANNEL_COUNT) return false;
+  return channels_[chIdx].link.setLocalAddress(local);
 }
 
 void Tnc::loop(bool radioReady) {
@@ -299,7 +347,8 @@ int Tnc::findChannelForIncoming(const ax25::Frame& frame) const {
   // Find channel with matching peer in a non-Disconnected state
   for (int i = 0; i < static_cast<int>(CHANNEL_COUNT); ++i) {
     if (channels_[i].link.state() != ax25::LinkState::Disconnected &&
-        ax25::addressEquals(channels_[i].link.peer(), frame.source)) {
+        ax25::addressEquals(channels_[i].link.peer(), frame.source) &&
+        ax25::addressEquals(channels_[i].link.local(), frame.destination)) {
       return i;
     }
   }
@@ -312,7 +361,8 @@ int Tnc::findChannelForIncoming(const ax25::Frame& frame) const {
     }
     if (active >= dedMaxIncoming_) return -1;
     for (int i = 0; i < static_cast<int>(CHANNEL_COUNT); ++i) {
-      if (channels_[i].link.state() == ax25::LinkState::Disconnected) {
+      if (channels_[i].link.state() == ax25::LinkState::Disconnected &&
+          ax25::addressEquals(channels_[i].link.local(), frame.destination)) {
         return i;
       }
     }
@@ -802,8 +852,7 @@ void Tnc::handleConsoleLine(char* line) {
       if (ident == nullptr) {
         Serial.println("usage: node ident <text>");
       } else {
-        strncpy(netrom_.ident, ident, sizeof(netrom_.ident) - 1);
-        netrom_.ident[sizeof(netrom_.ident) - 1] = '\0';
+        copySanitizedNodeText(netrom_.ident, sizeof(netrom_.ident), ident);
         saveSettings(); printNetrom();
       }
     } else if (strcmp(sub, "interval") == 0) {
@@ -838,8 +887,7 @@ void Tnc::handleConsoleLine(char* line) {
       char* text = strtok(nullptr, "");
       if (!text) { Serial.println("usage: beacon text <text>"); }
       else {
-        strncpy(beacon_.text, text, sizeof(beacon_.text) - 1);
-        beacon_.text[sizeof(beacon_.text) - 1] = '\0';
+        copySanitizedNodeText(beacon_.text, sizeof(beacon_.text), text);
         saveSettings(); printBeacon();
       }
     } else if (strcmp(sub, "dest") == 0) {
@@ -877,8 +925,7 @@ void Tnc::handleConsoleLine(char* line) {
         char aprsInfo[96]{};
         if (aprs::encodePosition(lat, lon, symBuf, cmt ? cmt : "", aprsInfo, sizeof(aprsInfo))) {
           ax25::parseAddress("APRS", beacon_.destination);
-          strncpy(beacon_.text, aprsInfo, sizeof(beacon_.text) - 1);
-          beacon_.text[sizeof(beacon_.text) - 1] = '\0';
+          copySanitizedNodeText(beacon_.text, sizeof(beacon_.text), aprsInfo);
           beacon_.enabled = true;
           saveSettings();
           printBeacon();
@@ -1007,6 +1054,14 @@ void Tnc::printInfo() const {
   Serial.printf("serial mode=%s channels=%u baud_kiss=%lu baud_ded=%lu\n",
                 serialModeName(), static_cast<unsigned>(CHANNEL_COUNT),
                 static_cast<unsigned long>(baudKiss_), static_cast<unsigned long>(baudDed_));
+  Serial.printf("ded host=%u selected_ch=%u last_I_ch=%u last_I_callsign=%s\n",
+                dedHostMode_ ? 1U : 0U,
+                static_cast<unsigned>(dedSelectedChannel_),
+                static_cast<unsigned>(dedLastCallsignChannel_),
+                dedLastCallsign_[0] != '\0' ? dedLastCallsign_ : "---");
+  Serial.printf("ded last_C_ch=%u last_C_dest=%s\n",
+                static_cast<unsigned>(dedLastConnectChannel_),
+                dedLastConnect_[0] != '\0' ? dedLastConnect_ : "---");
 }
 
 void Tnc::printStats() const {
@@ -1110,26 +1165,42 @@ void Tnc::checkLinkStatusEvents() {
       }
     }
 
-    const char* dedStatus = nullptr;
-    switch (state) {
-      case ax25::LinkState::Connecting:    dedStatus = "LINK RESET to station"; break;
-      case ax25::LinkState::Connected:     dedStatus = "CONNECTED to";          break;
-      case ax25::LinkState::Disconnecting: dedStatus = "DISCONNECTING fm";      break;
-      case ax25::LinkState::Disconnected:  dedStatus = "DISCONNECTED fm";       break;
-      case ax25::LinkState::Recovery:      dedStatus = "LINK FAILURE with";     break;
-      default: break;
-    }
-    if (dedStatus != nullptr) {
+    if (state == ax25::LinkState::Connecting ||
+        state == ax25::LinkState::Connected ||
+        state == ax25::LinkState::Disconnecting ||
+        state == ax25::LinkState::Disconnected ||
+        state == ax25::LinkState::Recovery) {
       char peer[12]{};
       ax25::formatAddress(channels_[i].link.peer(), peer, sizeof(peer));
       char text[64]{};
-      // No (channel) prefix — hostmode channel is in frame header; terminal adds prefix when displaying
-      if (peer[0] != '\0') {
-        snprintf(text, sizeof(text), "%s %s", dedStatus, peer);
-      } else {
-        snprintf(text, sizeof(text), "%s", dedStatus);
+      switch (state) {
+        case ax25::LinkState::Connecting:
+          snprintf(text, sizeof(text), "(%u) LINK RESET to station %s",
+                   channel, peer[0] != '\0' ? peer : "-");
+          break;
+        case ax25::LinkState::Connected:
+          snprintf(text, sizeof(text), "(%u) CONNECTED to %s",
+                   channel, peer[0] != '\0' ? peer : "-");
+          break;
+        case ax25::LinkState::Disconnecting:
+          snprintf(text, sizeof(text), "(%u) DISCONNECTING fm %s",
+                   channel, peer[0] != '\0' ? peer : "-");
+          break;
+        case ax25::LinkState::Disconnected:
+          snprintf(text, sizeof(text), "(%u) DISCONNECTED fm %s",
+                   channel, peer[0] != '\0' ? peer : "-");
+          break;
+        case ax25::LinkState::Recovery:
+          snprintf(text, sizeof(text), "(%u) LINK FAILURE with %s",
+                   channel, peer[0] != '\0' ? peer : "-");
+          break;
+        default:
+          text[0] = '\0';
+          break;
       }
-      enqueueDedEvent(channel, 3, reinterpret_cast<const uint8_t*>(text), strlen(text));
+      if (text[0] != '\0') {
+        enqueueDedEvent(channel, 3, reinterpret_cast<const uint8_t*>(text), strlen(text));
+      }
     }
     if (serialMode_ == SerialMode::Wa8ded && !dedHostMode_ && dedUnattended_ &&
         state == ax25::LinkState::Connected && dedUnattendedText_[0] != '\0') {
@@ -1150,7 +1221,8 @@ void Tnc::processNodeInput(uint8_t chIdx, const uint8_t* data, size_t len) {
     cs.nodeGreetingSent = true;
   }
   for (size_t i = 0; i < len; ++i) {
-    const char c = static_cast<char>(data[i]);
+    const uint8_t byte = data[i];
+    const char c = static_cast<char>(byte);
     if (c == '\r' || c == '\n') {
       cs.nodeLine[cs.nodeLinePos] = '\0';
       switch (cs.shellMode) {
@@ -1161,6 +1233,11 @@ void Tnc::processNodeInput(uint8_t chIdx, const uint8_t* data, size_t len) {
       cs.nodeLinePos = 0;
       continue;
     }
+    if (byte == 0x08 || byte == 0x7F) {
+      if (cs.nodeLinePos > 0) --cs.nodeLinePos;
+      continue;
+    }
+    if (!isNodeInputTextByte(byte)) continue;
     if (cs.nodeLinePos < sizeof(cs.nodeLine) - 1)
       cs.nodeLine[cs.nodeLinePos++] = c;
   }
@@ -1343,8 +1420,18 @@ void Tnc::handleBbsComposeLine(uint8_t chIdx, const char* line) {
 }
 
 void Tnc::sendNodeText(uint8_t chIdx, const char* text) {
-  if (text != nullptr) {
-    sendConnectedChunked(chIdx, reinterpret_cast<const uint8_t*>(text), strlen(text));
+  if (text == nullptr) return;
+  uint8_t chunk[64]{};
+  size_t pos = 0;
+  for (const char* p = text; *p != '\0'; ++p) {
+    chunk[pos++] = sanitizeNodeTextByte(static_cast<uint8_t>(*p));
+    if (pos == sizeof(chunk)) {
+      sendConnectedChunked(chIdx, chunk, pos);
+      pos = 0;
+    }
+  }
+  if (pos > 0) {
+    sendConnectedChunked(chIdx, chunk, pos);
   }
 }
 
@@ -1597,6 +1684,9 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     local_ = newAddr;
     resetLinksForLocal();
     ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
+    strncpy(dedLastCallsign_, savedCallsign_, sizeof(dedLastCallsign_) - 1);
+    dedLastCallsign_[sizeof(dedLastCallsign_) - 1] = '\0';
+    dedLastCallsignChannel_ = dedSelectedChannel_;
     Preferences prefs;
     if (prefs.begin("axloratnc", false)) {
       prefs.putString("callsign", savedCallsign_);
@@ -1716,8 +1806,7 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     dedUnattended_ = dedCtextMode_ != 0;
     const char* text = skipSpaces(arg + 1);
     if (*text != '\0') {
-      strncpy(dedUnattendedText_, text, sizeof(dedUnattendedText_) - 1);
-      dedUnattendedText_[sizeof(dedUnattendedText_) - 1] = '\0';
+      copySanitizedNodeText(dedUnattendedText_, sizeof(dedUnattendedText_), text);
     }
     saveDedConfig();
     return;
@@ -1795,6 +1884,9 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     local_ = newAddr;
     resetLinksForLocal();
     ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
+    strncpy(dedLastCallsign_, savedCallsign_, sizeof(dedLastCallsign_) - 1);
+    dedLastCallsign_[sizeof(dedLastCallsign_) - 1] = '\0';
+    dedLastCallsignChannel_ = dedSelectedChannel_;
     Preferences prefs;
     if (prefs.begin("axloratnc", false)) { prefs.putString("callsign", savedCallsign_); prefs.end(); }
     return;
@@ -1827,8 +1919,7 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
       Serial.printf("BTEXT %s\r\n", beacon_.text);
       return;
     }
-    strncpy(beacon_.text, rest, sizeof(beacon_.text) - 1);
-    beacon_.text[sizeof(beacon_.text) - 1] = '\0';
+    copySanitizedNodeText(beacon_.text, sizeof(beacon_.text), rest);
     saveSettings();
     return;
   }
@@ -2082,8 +2173,29 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
 
   if (cmd[0] == 'C') {
     const char* dest = skipSpaces(cmd + 1);
-    if (channel >= 1 && channel <= CHANNEL_COUNT && connect(channel - 1, dest)) {
-      sendDedShort(channel, 0);
+    if (channel == 0) {
+      ax25::Address unproto{};
+      if (parseDedConnectAddress(dest, unproto)) {
+        dedUnprotoDestination_ = unproto;
+        copyFormattedAddress(unproto, dedLastConnect_, sizeof(dedLastConnect_));
+        dedLastConnectChannel_ = channel;
+        saveDedConfig();
+        sendDedShort(channel, 0);
+      } else {
+        sendDedText(channel, 2, "INVALID CALLSIGN");
+      }
+      return;
+    }
+    if (channel >= 1 && channel <= CHANNEL_COUNT) {
+      ax25::Address connectDest{};
+      if (parseDedConnectAddress(dest, connectDest) &&
+          channels_[channel - 1].link.connectTo(connectDest)) {
+        copyFormattedAddress(connectDest, dedLastConnect_, sizeof(dedLastConnect_));
+        dedLastConnectChannel_ = channel;
+        sendDedShort(channel, 0);
+      } else {
+        sendDedText(channel, 2, "CONNECT FAILED");
+      }
     } else {
       sendDedText(channel, 2, "CONNECT FAILED");
     }
@@ -2103,7 +2215,9 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
     const char* arg = skipSpaces(cmd + 1);
     if (*arg == '\0') {
       char callsign[12]{};
-      ax25::formatAddress(local_, callsign, sizeof(callsign));
+      const ax25::Address& current =
+          (channel >= 1 && channel <= CHANNEL_COUNT) ? channels_[channel - 1].link.local() : local_;
+      ax25::formatAddress(current, callsign, sizeof(callsign));
       sendDedText(channel, 1, callsign);
       return;
     }
@@ -2112,11 +2226,25 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
       sendDedText(channel, 2, "INVALID CALLSIGN");
       return;
     }
-    local_ = newAddr;
-    resetLinksForLocal();
-    ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
+    char formatted[12]{};
+    ax25::formatAddress(newAddr, formatted, sizeof(formatted));
+    strncpy(dedLastCallsign_, formatted, sizeof(dedLastCallsign_) - 1);
+    dedLastCallsign_[sizeof(dedLastCallsign_) - 1] = '\0';
+    dedLastCallsignChannel_ = channel;
+    if (channel == 0) {
+      local_ = newAddr;
+      strncpy(savedCallsign_, formatted, sizeof(savedCallsign_) - 1);
+      savedCallsign_[sizeof(savedCallsign_) - 1] = '\0';
+      resetLinksForLocal();
+    } else if (channel <= CHANNEL_COUNT && !setChannelLocal(channel - 1, newAddr)) {
+      sendDedText(channel, 2, "CHANNEL BUSY");
+      return;
+    } else if (channel > CHANNEL_COUNT) {
+      sendDedText(channel, 2, "INVALID CHANNEL");
+      return;
+    }
     Preferences prefs;
-    if (prefs.begin("axloratnc", false)) {
+    if (channel == 0 && prefs.begin("axloratnc", false)) {
       prefs.putString("callsign", savedCallsign_);
       prefs.end();
     }
@@ -2129,15 +2257,34 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
     const bool connected = channels_[chIdx].link.state() == ax25::LinkState::Connected;
     char peer[12]{};
     ax25::formatAddress(channels_[chIdx].link.peer(), peer, sizeof(peer));
-    char status[64]{};
-    // Format: connected(0/1) queueSize retryCount outstanding peer
-    snprintf(status, sizeof(status), "%u %u %u %u %s",
-             connected ? 1U : 0U,
+    const size_t pending = pendingDedEvents(channel, 0);
+    char status[80]{};
+    // Six numeric fields keep classic WA8DED/TF host clients happy:
+    // rx-wait tx-wait outstanding queued retries connected [peer].
+    snprintf(status, sizeof(status), "%u 0 %u %u %u %u %s",
+             pending > 255 ? 255U : static_cast<unsigned>(pending),
+             static_cast<unsigned>(channels_[chIdx].link.outstandingFrameCount()),
              static_cast<unsigned>(channels_[chIdx].link.connectedQueueSize()),
              static_cast<unsigned>(channels_[chIdx].link.retryCount()),
-             static_cast<unsigned>(channels_[chIdx].link.outstandingFrameCount()),
+             connected ? 1U : 0U,
              connected ? peer : "-");
     sendDedText(channel, 1, status);
+    return;
+  }
+
+  if (cmd[0] == '@') {
+    const char* token = cmd + 1;
+    if (token[0] == 'B' && (token[1] == '\0' || token[1] == ' ')) {
+      const uint8_t chIdx = (channel >= 1 && channel <= CHANNEL_COUNT) ? channel - 1 : 0;
+      const size_t freeSlots = channels_[chIdx].link.connectedQueueFree();
+      const uint32_t freeBytes = freeSlots * static_cast<uint32_t>(
+          dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : ax25::MAX_INFO_LEN);
+      char text[8]{};
+      snprintf(text, sizeof(text), "%u", freeBytes > 255 ? 255U : static_cast<unsigned>(freeBytes));
+      sendDedText(channel, 1, text);
+      return;
+    }
+    sendDedText(channel, 2, "INVALID COMMAND");
     return;
   }
 
@@ -2293,6 +2440,20 @@ bool Tnc::enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, si
   event.len     = len > sizeof(event.data) ? sizeof(event.data) : len;
   if (data != nullptr && event.len > 0) memcpy(event.data, data, event.len);
   return dedEvents_.push(event);
+}
+
+size_t Tnc::pendingDedEvents(uint8_t channel, uint8_t wanted) {
+  size_t pending = 0;
+  const size_t count = dedEvents_.size();
+  for (size_t i = 0; i < count; ++i) {
+    DedEvent event{};
+    if (!dedEvents_.pop(event)) return pending;
+    const bool channelOk = (channel == 0) || (event.channel == channel);
+    const bool typeOk = (wanted == 0) || (event.code == wanted);
+    if (channelOk && typeOk) ++pending;
+    dedEvents_.push(event);
+  }
+  return pending;
 }
 
 bool Tnc::popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out) {
@@ -2680,6 +2841,12 @@ void Tnc::fillDisplayInfo(display::DisplayInfo& out) const {
   out.codingRate   = radioConfig_.codingRate;
   out.baudKiss     = baudKiss_;
   out.baudDed      = baudDed_;
+  out.dedHostMode  = dedHostMode_;
+  out.dedSelectedChannel = dedSelectedChannel_;
+  out.dedLastCallsignChannel = dedLastCallsignChannel_;
+  strncpy(out.dedLastCallsign, dedLastCallsign_, sizeof(out.dedLastCallsign) - 1);
+  out.dedLastConnectChannel = dedLastConnectChannel_;
+  strncpy(out.dedLastConnect, dedLastConnect_, sizeof(out.dedLastConnect) - 1);
 
   // ---- page 3: AX.25 stats aggregated across all channels ----
   out.l2Retries    = 0;
@@ -2781,6 +2948,7 @@ void Tnc::loadSettings() {
     beacon_.enabled    = prefs.getBool("bc_en",  beacon_.enabled);
     beacon_.intervalMs = prefs.getULong("bc_int", beacon_.intervalMs);
     prefs.getString("bc_text", beacon_.text, sizeof(beacon_.text));
+    copySanitizedNodeText(beacon_.text, sizeof(beacon_.text), beacon_.text);
     prefs.getString("bc_dest", addr, sizeof(addr));
     textToAddress(addr, beacon_.destination);
     beacon_.pathCount = prefs.getUChar("bc_path_n", 0);
@@ -2795,6 +2963,7 @@ void Tnc::loadSettings() {
     netrom_.broadcastIntervalMs = prefs.getULong("nr_int", netrom_.broadcastIntervalMs);
     prefs.getString("nr_alias", netrom_.alias, sizeof(netrom_.alias));
     prefs.getString("nr_ident", netrom_.ident, sizeof(netrom_.ident));
+    copySanitizedNodeText(netrom_.ident, sizeof(netrom_.ident), netrom_.ident);
     // WA8DED / link parameters
     dedFrack_            = prefs.getUShort("d_frack",  dedFrack_);
     dedRetryLimit_       = prefs.getUChar ("d_n2",     dedRetryLimit_);
@@ -2820,6 +2989,7 @@ void Tnc::loadSettings() {
     dedCtextMode_        = prefs.getUChar ("d_ctext",  dedCtextMode_);
     dedUnattended_       = dedCtextMode_ != 0;
     prefs.getString("d_utext",  dedUnattendedText_,  sizeof(dedUnattendedText_));
+    copySanitizedNodeText(dedUnattendedText_, sizeof(dedUnattendedText_), dedUnattendedText_);
     prefs.getString("d_mon",    dedMonitorMode_,      sizeof(dedMonitorMode_));
     monitorEnabled_ = (strchr(dedMonitorMode_, 'N') == nullptr);
     char uproto[16]{};
