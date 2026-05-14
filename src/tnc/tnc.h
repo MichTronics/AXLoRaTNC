@@ -182,7 +182,7 @@ class Tnc {
   void handleBbsComposeLine(uint8_t chIdx, const char* line);
   void sendNodeText(uint8_t chIdx, const char* text);
   // Splits data into PACLEN-sized I-frames before queuing
-  void sendConnectedChunked(uint8_t chIdx, const uint8_t* data, size_t len);
+  bool sendConnectedChunked(uint8_t chIdx, const uint8_t* data, size_t len);
 
   // Digipeater
   bool maybeDigipeat(const ax25::Frame& frame);
@@ -214,6 +214,7 @@ class Tnc {
   void saveSettings();
   void saveDedConfig();
   void saveRadioConfig();
+  void resetLinksForLocal();
   void applyRadioConfig();
   void saveSerialMode(SerialMode mode);
   void setSerialMode(SerialMode mode);

@@ -144,6 +144,19 @@ void Tnc::begin(const char* callsign) {
   }
 }
 
+void Tnc::resetLinksForLocal() {
+  ax25::L2Config cfg{};
+  cfg.local = local_;
+  cfg.t1Ms = static_cast<uint32_t>(dedFrack_) * 10UL;
+  cfg.t2Ms = static_cast<uint32_t>(dedT2_) * 10UL;
+  cfg.t3Ms = static_cast<uint32_t>(dedT3_) * 10UL;
+  cfg.n2 = dedRetryLimit_;
+  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
+    channels_[i].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[i]);
+    channels_[i].link.setMaxFrame(dedMaxFrame_);
+  }
+}
+
 void Tnc::loop(bool radioReady) {
   serviceSerial();
   if (radioReady) {
@@ -571,11 +584,7 @@ void Tnc::handleConsoleLine(char* line) {
         Serial.println("invalid callsign");
       } else {
         local_ = newAddr;
-        ax25::L2Config cfg{};
-        cfg.local = local_;
-        for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
-          channels_[i].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[i]);
-        }
+        resetLinksForLocal();
         ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
         Preferences prefs;
         if (prefs.begin("axloratnc", false)) {
@@ -1049,8 +1058,7 @@ bool Tnc::sendUi(const char* destination, const char* text) {
 
 bool Tnc::sendConnected(uint8_t chIdx, const char* text) {
   if (chIdx >= CHANNEL_COUNT || text == nullptr) return false;
-  sendConnectedChunked(chIdx, reinterpret_cast<const uint8_t*>(text), strlen(text));
-  return true;
+  return sendConnectedChunked(chIdx, reinterpret_cast<const uint8_t*>(text), strlen(text));
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,17 +1335,22 @@ void Tnc::sendNodeText(uint8_t chIdx, const char* text) {
   }
 }
 
-void Tnc::sendConnectedChunked(uint8_t chIdx, const uint8_t* data, size_t len) {
-  if (data == nullptr || len == 0) return;
+bool Tnc::sendConnectedChunked(uint8_t chIdx, const uint8_t* data, size_t len) {
+  if (chIdx >= CHANNEL_COUNT || data == nullptr || len == 0) return false;
   const size_t paclen = (dedIPollFrameLength_ > 0)
       ? static_cast<size_t>(dedIPollFrameLength_)
       : ax25::MAX_INFO_LEN;
   size_t offset = 0;
+  bool allQueued = true;
   while (offset < len) {
     const size_t chunk = (len - offset) > paclen ? paclen : (len - offset);
-    channels_[chIdx].link.sendConnected(data + offset, chunk);
+    if (!channels_[chIdx].link.sendConnected(data + offset, chunk)) {
+      allQueued = false;
+      break;
+    }
     offset += chunk;
   }
+  return allQueued;
 }
 
 // ---------------------------------------------------------------------------
@@ -1459,11 +1472,6 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
   auto printBoolParam = [&](char name, bool value) {
     Serial.printf("%c %u\r\n", name, value ? 1U : 0U);
   };
-  auto setBoolParam = [&](char name, bool& value) {
-    if (*arg == '\0') { printBoolParam(name, value); return; }
-    value = (*arg != '0');
-  };
-
   if (c == '\0') return;
   if (c == 'A') {
     if (*arg == '\0') { Serial.printf("A %u\r\n", dedAutoLf_ ? 1U : 0U); return; }
@@ -1574,11 +1582,7 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
       return;
     }
     local_ = newAddr;
-    ax25::L2Config cfg{};
-    cfg.local = local_;
-    for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
-      channels_[i].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[i]);
-    }
+    resetLinksForLocal();
     ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
     Preferences prefs;
     if (prefs.begin("axloratnc", false)) {
@@ -1776,11 +1780,7 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     ax25::Address newAddr{};
     if (!ax25::parseAddress(cs, newAddr)) { Serial.print("? INVALID CALLSIGN\r\n"); return; }
     local_ = newAddr;
-    ax25::L2Config cfg{};
-    cfg.local = local_;
-    for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
-      channels_[i].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[i]);
-    }
+    resetLinksForLocal();
     ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
     Preferences prefs;
     if (prefs.begin("axloratnc", false)) { prefs.putString("callsign", savedCallsign_); prefs.end(); }
@@ -1997,17 +1997,15 @@ void Tnc::handleDedHostFrame(uint8_t channel, uint8_t infoCmd,
   if (infoCmd == 0) {
     // Data frame
     if (channel == 0) {
-      ax25::Address dest{};
-      ax25::parseAddress("CQ", dest);
-      if (channels_[0].link.sendUi(dest, data, len)) sendDedShort(channel, 0);
+      if (channels_[0].link.sendUi(dedUnprotoDestination_, data, len)) sendDedShort(channel, 0);
       else sendDedText(channel, 2, "TNC BUSY - LINE IGNORED");
       return;
     }
     if (channel >= 1 && channel <= CHANNEL_COUNT) {
       const uint8_t chIdx = channel - 1;
       if (channels_[chIdx].link.state() == ax25::LinkState::Connected) {
-        sendConnectedChunked(chIdx, data, len);
-        sendDedShort(channel, 0);
+        if (sendConnectedChunked(chIdx, data, len)) sendDedShort(channel, 0);
+        else sendDedText(channel, 2, "TNC BUSY - LINE IGNORED");
       } else {
         sendDedText(channel, 2, "TNC BUSY - LINE IGNORED");
       }
@@ -2102,11 +2100,7 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
       return;
     }
     local_ = newAddr;
-    ax25::L2Config cfg{};
-    cfg.local = local_;
-    for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
-      channels_[i].link.begin(cfg, radioTxCallback, dataCallback, &channelCtx_[i]);
-    }
+    resetLinksForLocal();
     ax25::formatAddress(local_, savedCallsign_, sizeof(savedCallsign_));
     Preferences prefs;
     if (prefs.begin("axloratnc", false)) {
