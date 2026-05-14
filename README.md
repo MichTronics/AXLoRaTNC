@@ -2,18 +2,40 @@
 
 AXLoRaTNC is a real AX.25 packet-radio TNC for ESP32 + LoRa. AX.25 Level 2 frames stay AX.25 frames; LoRa only replaces the classic AFSK/FSK modem layer.
 
+**[📖 Full documentation](https://michtronics.github.io/AXLoRaTNC/)  ·  [⚡ Web installer](https://michtronics.github.io/AXLoRaTNC/flash/)  ·  [📦 Releases](https://github.com/MichTronics/AXLoRaTNC/releases)**
+
+## Flash (easiest)
+
+Use the browser-based installer — no drivers or tools needed. Works in Chrome and Edge.
+
+👉 **[https://michtronics.github.io/AXLoRaTNC/flash/](https://michtronics.github.io/AXLoRaTNC/flash/)**
+
 ## Target hardware
 
-| Variant | MCU | Radio | Build env |
-|---|---|---|---|
-| DevKit V1 + E22 | ESP32 | EBYTE E22 SX1262 | `devkitv1_e22` |
-| Heltec V3 | ESP32-S3 | SX1262 | `heltec_v3` |
-| T-Beam | ESP32 | SX1276 | `tbeam` |
+| Variant | MCU | Radio | Build env | Status |
+|---|---|---|---|---|
+| ESP32 DevKit V1 + EBYTE E22 | ESP32 | SX1262 | `devkitv1_e22` | ✅ tested |
+| Heltec WiFi LoRa 32 V3 | ESP32-S3 | SX1262 | `heltec_v3` | ⚠ not tested |
+| TTGO T-Beam | ESP32 | SX1276 | `tbeam` | ⚠ not tested |
+| LilyGo T3 LoRa32 V1.6.1 | ESP32 | SX1276 | `lilygo_t3_v161` | ⚠ not tested |
 
-## Build
+## Build from source
+
+**Prerequisites:** Python 3, [PlatformIO](https://platformio.org/)
 
 ```sh
-./venv/bin/pio run -e devkitv1_e22
+git clone https://github.com/MichTronics/AXLoRaTNC.git
+cd AXLoRaTNC
+python3 -m venv venv
+./venv/bin/pip install platformio
+```
+
+Build and flash:
+
+```sh
+./venv/bin/pio run -e devkitv1_e22                        # build only
+./venv/bin/pio run -e devkitv1_e22 --target upload        # build + flash
+./venv/bin/pio device monitor -b 115200                   # serial monitor
 ```
 
 ## LoRa defaults
