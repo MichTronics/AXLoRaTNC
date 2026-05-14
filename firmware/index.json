@@ -23,10 +23,10 @@
   ],
   "channels": {
     "dev": {
-      "version": "dev-5724f2c",
+      "version": "dev-05d3767",
       "date": "2026-05-14",
       "manifest_path": "firmware/dev/{board}/manifest.json",
-      "commit_url": "https://github.com/MichTronics/AXLoRaTNC/commit/5724f2c861b1f46f82ecc34f0c72cd46ca3ee316"
+      "commit_url": "https://github.com/MichTronics/AXLoRaTNC/commit/05d3767fc7158b5c1ebffe311d7cf77881f1fe13"
     },
     "stable": {
       "version": "v0.1.0",
