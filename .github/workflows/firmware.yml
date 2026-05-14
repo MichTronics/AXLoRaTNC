@@ -158,15 +158,17 @@ jobs:
 
       # ── Get current gh-pages state (partial-update pattern) ──────────────
       - name: Checkout gh-pages branch
+        id: checkout_pages
+        continue-on-error: true
         uses: actions/checkout@v4
         with:
           ref: gh-pages
           path: _site
+          fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
-        id: checkout_pages
 
-      - name: Initialise gh-pages if branch is missing
+      # Branch does not exist yet on the first ever deploy.
+      - name: Initialise empty _site if gh-pages is missing
         if: steps.checkout_pages.outcome == 'failure'
         run: mkdir -p _site
 
@@ -204,9 +206,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # Fresh init when gh-pages branch didn't exist yet.
+          # git init -b sets the initial branch name directly (git ≥ 2.28).
           if [ ! -d .git ]; then
-            git init
-            git checkout --orphan gh-pages
+            git init -b gh-pages
             git remote add origin \
               "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           else
@@ -219,5 +221,6 @@ jobs:
             echo "Nothing changed — skipping push"
           else
             git commit -m "deploy: ${{ steps.meta.outputs.channel }} ${{ steps.meta.outputs.version }}"
-            git push origin gh-pages --force
+            # HEAD:gh-pages works regardless of local branch name.
+            git push origin HEAD:gh-pages --force
           fi
