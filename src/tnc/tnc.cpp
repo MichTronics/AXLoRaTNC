@@ -460,14 +460,27 @@ void Tnc::serviceSerial() {
       handleQuietEscape(b);
       continue;
     }
-    if (b == '\r') continue;
-    if (b == '\n') {
+    if (b == '\r' || b == '\n') {
+      if (linePos_ == 0) continue;
       line_[linePos_] = '\0';
+      Serial.print("\r\n");
       handleConsoleLine(line_);
       linePos_ = 0;
       continue;
     }
-    if (linePos_ < sizeof(line_) - 1) line_[linePos_++] = static_cast<char>(b);
+    if (b == 0x08 || b == 0x7F) {
+      if (linePos_ > 0) {
+        --linePos_;
+        Serial.print("\b \b");
+      }
+      continue;
+    }
+    if (linePos_ < sizeof(line_) - 1) {
+      line_[linePos_++] = static_cast<char>(b);
+      Serial.write(b);
+    } else {
+      Serial.write(static_cast<uint8_t>(0x07));
+    }
   }
 }
 
