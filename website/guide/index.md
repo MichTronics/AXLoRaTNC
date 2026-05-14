@@ -103,8 +103,11 @@ AXLoRaTNC works with any standard KISS or WA8DED host application:
 |---|---|---|
 | kissattach (Linux) | KISS | Standard AX.25 stack |
 | Dire Wolf | KISS | Set device to the ESP32 serial port |
-| LinBPQ / BPQ32 | KISS | See [BPQ setup guide](/guide/bpq) |
+| LinBPQ / BPQ32 | KISS or WA8DED | See [BPQ setup guide](/guide/bpq); port type `DED` for WA8DED |
 | F6FBB | KISS or WA8DED | Host type `D` for WA8DED |
+| TFPCX + TSTHOST | WA8DED | See [WA8DED guide](/guide/wa8ded) |
+| WinPack | WA8DED | TNC type WA8DED |
+| JNOS | WA8DED | Interface type `asy`, tnc `ded` |
 | Graphic Packet | WA8DED | |
 | PaxTerm | WA8DED | |
 | APRS clients | KISS | Any client supporting KISS TNCs |

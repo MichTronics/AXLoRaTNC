@@ -243,42 +243,68 @@ For a working LinBPQ/BPQ32 setup, see [docs/BPQ.md](docs/BPQ.md). A complete exa
 Switch with `mode ded`. The binary host frame format is:
 
 ```
-host → tnc:  {channel} {info/cmd} {count} {data…}
-tnc  → host: {channel} {code}  [data…]
+host → tnc:  [channel] [cmd] [count] [data…]
+tnc  → host: [channel] [code] [data…]
 ```
 
 **8 connected channels** (1–8). Channel 0 = UI/unproto.
+
+### Commands
 
 | Command | Function |
 |---|---|
 | `G` / `G0` / `G1` | Poll for events |
 | `C <CALL>` | Connect on channel n |
 | `D` | Disconnect channel n |
-| `L` | Channel link status |
-| `M` / `M1` | Enable monitor mode |
-| `M0` | Disable monitor mode |
-| `JHOST0` | Return to console mode |
-| `JHOST1` | Enter hostmode (acknowledged) |
+| `I [CALL]` | Query / set own callsign |
+| `L` | Channel link status (connected, queue, retries, peer) |
+| `M [string]` | Query / set monitor mode (`I`/`U`/`S` letters, `N` = off) |
+| `V` | Firmware version string |
+| `S [n]` | Query / select channel (0–8) |
+| `U [n]` | Unattended mode (0 = off, 1/2 = on with auto-text) |
+| `JHOST0` | Return to terminal mode |
+| `JHOST1` | Enter binary hostmode (acknowledged) |
+| `@B` | TX buffer free bytes |
+| `@Q` / `QRES` | Reset all DED parameters to defaults |
 
-**Monitor mode** (`M` or `M1`): all received and decoded AX.25 frames are emitted as DED event code 5 in the format:
+### Parameters (query / set)
 
-```
-FM SRC TO DST [VIA R1,R2] <type> RSSI=x SNR=y[:info]
-```
+| Cmd | Parameter | Default |
+|---|---|---|
+| `A` | Auto-LF | 1 |
+| `B` | DAMA timeout | 120 |
+| `E` | Echo | 1 |
+| `F` | FRACK (T1 × 100 ms) | 250 |
+| `K` | Timestamp in monitor | 0 |
+| `N` | Retry limit (N2) | 10 |
+| `O` | Max outstanding frames (MAXFRAME) | 2 |
+| `P` | CSMA persistence | 63 |
+| `R` | Digipeater on/off | 0 |
+| `T` | TX delay (× 10 ms) | 30 |
+| `W` | Slot time (× 10 ms) | 10 |
+| `X` | TX enable | 1 |
+| `Y` | Max incoming connections | 4 |
+| `Z` | Flow control (bit 0 = RTS/CTS, bit 1 = XON/XOFF) | 3 |
 
-Event codes returned by the TNC:
+All parameters persist in NVS across reboots.
+
+### Event codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Acknowledgement / no event |
 | 1 | Informational text |
 | 2 | Error text |
-| 3 | Link status change |
-| 5 | Monitor frame |
+| 3 | Link status change (`CONNECTED to CALL`, `DISCONNECTED fm CALL`, `LINK FAILURE with CALL`) |
+| 5 | Monitor frame header |
 | 6 | Connected data received |
 | 7 | UI data received |
 
-Compatible with: F6FBB (host type `D`), Graphic Packet, PaxTerm.
+Monitor frame format: `FM SRC TO DST [VIA R1,R2] <TYPE> RSSI=x SNR=y[:info]`
+
+Compatible with: F6FBB (host type `D`), TFPCX/TSTHOST, WinPack, BPQ32/LinBPQ (port type `DED`), JNOS, Graphic Packet, PaxTerm.
+
+For full protocol details see [website/guide/wa8ded](https://michtronics.github.io/AXLoRaTNC/guide/wa8ded).
 
 ---
 
@@ -356,4 +382,4 @@ RadioLib is isolated under `src/radio/`. The AX.25 stack under `src/ax25/` has n
 **Serial interfaces**
 - Console (human-readable, all commands)
 - KISS (compatible with all standard KISS software)
-- WA8DED hostmode: 8 channels, G/C/D/L/M polling, event codes 1-7, monitor mode
+- WA8DED hostmode: 8 channels, full command set (G/C/D/I/L/M/S/U/V/JHOST + A/B/E/F/K/N/O/P/R/T/W/X/Y/Z parameters + @B/@Q), event codes 0–7, monitor mode with frame-type filter (I/U/S), PACLEN fragmentation, XON/XOFF and hardware flow control, FRMR handling, NVS-persistent parameters, compatible with F6FBB, TFPCX, WinPack, BPQ32, JNOS

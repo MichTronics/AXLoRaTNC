@@ -528,6 +528,20 @@ void LinkLayer::handleU(const Frame& frame) {
     t2_.stop();
     t2PendingAck_ = false;
     setState(LinkState::Disconnected);
+    return;
+  }
+  if (type == UFrameType::FRMR) {
+    // Peer rejected our last frame as invalid — reset the link cleanly.
+    LOG_PROTO("AX25 FRMR received, resetting link");
+    clearWindow();
+    clearReceiveBuffer();
+    txQueue_.clear();
+    t1_.stop();
+    t2_.stop();
+    t2PendingAck_ = false;
+    peerBusy_ = false;
+    sendUnnumbered(UFrameType::DM);
+    setState(LinkState::Disconnected);
   }
 }
 

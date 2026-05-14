@@ -39,6 +39,7 @@ class RingBuffer {
   bool empty() const { return count_ == 0; }
   bool full() const { return count_ == Capacity; }
   size_t size() const { return count_; }
+  size_t free() const { return Capacity - count_; }
   void clear() { head_ = 0; tail_ = 0; count_ = 0; }
 
  private:

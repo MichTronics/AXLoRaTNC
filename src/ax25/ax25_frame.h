@@ -9,11 +9,12 @@ namespace axlora::ax25 {
 
 static constexpr uint8_t PID_NO_LAYER3 = 0xF0;
 static constexpr uint16_t MAX_INFO_LEN = 256;
-static constexpr uint8_t CTRL_UI = 0x03;
+static constexpr uint8_t CTRL_UI   = 0x03;
 static constexpr uint8_t CTRL_SABM = 0x2F;
 static constexpr uint8_t CTRL_DISC = 0x43;
-static constexpr uint8_t CTRL_DM = 0x0F;
-static constexpr uint8_t CTRL_UA = 0x63;
+static constexpr uint8_t CTRL_DM   = 0x0F;
+static constexpr uint8_t CTRL_UA   = 0x63;
+static constexpr uint8_t CTRL_FRMR = 0x87;
 
 enum class FrameKind : uint8_t {
   I,
@@ -35,6 +36,7 @@ enum class UFrameType : uint8_t {
   DISC,
   DM,
   UI,
+  FRMR,
   Unknown,
 };
 

@@ -29,4 +29,9 @@ static constexpr int PIN_GPS_TX = -1;
 static constexpr int PIN_DS18B20_ONEWIRE = 27;
 static constexpr int PIN_AM2302_DATA = 26;
 
+// UART hardware flow control (-1 = disabled; set to real GPIO numbers if
+// your USB-serial adapter is wired for RTS/CTS).
+static constexpr int PIN_UART_RTS = -1;
+static constexpr int PIN_UART_CTS = -1;
+
 }

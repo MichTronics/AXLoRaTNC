@@ -49,10 +49,11 @@ SFrameType sType(uint8_t control) { return static_cast<SFrameType>((control >> 2
 UFrameType uType(uint8_t control) {
   switch (control & static_cast<uint8_t>(~0x10)) {
     case CTRL_SABM & static_cast<uint8_t>(~0x10): return UFrameType::SABM;
-    case CTRL_UA & static_cast<uint8_t>(~0x10): return UFrameType::UA;
+    case CTRL_UA   & static_cast<uint8_t>(~0x10): return UFrameType::UA;
     case CTRL_DISC & static_cast<uint8_t>(~0x10): return UFrameType::DISC;
-    case CTRL_DM & static_cast<uint8_t>(~0x10): return UFrameType::DM;
-    case CTRL_UI & static_cast<uint8_t>(~0x10): return UFrameType::UI;
+    case CTRL_DM   & static_cast<uint8_t>(~0x10): return UFrameType::DM;
+    case CTRL_UI   & static_cast<uint8_t>(~0x10): return UFrameType::UI;
+    case CTRL_FRMR & static_cast<uint8_t>(~0x10): return UFrameType::FRMR;
     default: return UFrameType::Unknown;
   }
 }

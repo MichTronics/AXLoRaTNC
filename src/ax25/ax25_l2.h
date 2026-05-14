@@ -53,6 +53,7 @@ class LinkLayer {
   bool disconnect();
   bool sendConnected(const uint8_t* data, size_t len);
   size_t connectedQueueSize() const { return txQueue_.size(); }
+  size_t connectedQueueFree() const { return txQueue_.free(); }
   uint8_t outstandingFrameCount() const { return outstandingCount(); }
   uint8_t retryCount() const { return retryCount_; }
   void setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms);

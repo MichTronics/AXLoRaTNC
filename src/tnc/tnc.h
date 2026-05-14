@@ -181,6 +181,8 @@ class Tnc {
   void handleBbsLine(uint8_t chIdx, const char* line);
   void handleBbsComposeLine(uint8_t chIdx, const char* line);
   void sendNodeText(uint8_t chIdx, const char* text);
+  // Splits data into PACLEN-sized I-frames before queuing
+  void sendConnectedChunked(uint8_t chIdx, const uint8_t* data, size_t len);
 
   // Digipeater
   bool maybeDigipeat(const ax25::Frame& frame);
@@ -210,6 +212,7 @@ class Tnc {
   // Settings
   void loadSettings();
   void saveSettings();
+  void saveDedConfig();
   void saveRadioConfig();
   void applyRadioConfig();
   void saveSerialMode(SerialMode mode);
@@ -285,6 +288,7 @@ class Tnc {
   NetromRoute      netromRoutes_[20]{};
 
   bool     monitorEnabled_   = false;
+  uint32_t monitorLastEnqueueMs_ = 0;
   float    lastRssi_         = 0.0f;
   float    lastSnr_          = 0.0f;
   uint32_t rawTx_           = 0;
