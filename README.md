@@ -41,7 +41,7 @@ Open the serial monitor at **115 200 baud**. All settings are stored in ESP32 NV
 
 ```text
 callsign              → show current callsign
-callsign PD4MV-0      → set and persist callsign
+callsign N0CALL-0      → set and persist callsign
 ```
 
 ### Radio config
@@ -74,8 +74,8 @@ Use `profile fast` only on a dummy load or shielded lab setup.
 ### AX.25 connected mode
 
 ```text
-connect PD4MV-1           → connect on channel 1
-connect 2 PD4MV-2         → connect on channel 2 (1–8)
+connect N0CALL-1           → connect on channel 1
+connect 2 N0CALL-2         → connect on channel 2 (1–8)
 disconnect                → disconnect channel 1
 disconnect 2              → disconnect channel 2
 send hello                → send on channel 1

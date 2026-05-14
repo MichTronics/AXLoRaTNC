@@ -312,6 +312,7 @@ void Tnc::serviceRadio() {
   ++rawRx_;
   if (rx.len >= 2 && ax25::checkFcs(rx.data, rx.len)) {
     emitKissData(rx.data, rx.len - 2);
+    if (serialMode_ == SerialMode::Kiss) return;
     ax25::Frame frame{};
     if (ax25::decodeFrame(rx.data, rx.len, frame, true)) {
       // Detect APRS (UI, PID=0xF0) and log parsed content
