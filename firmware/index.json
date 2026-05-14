@@ -1,0 +1,32 @@
+{
+  "boards": [
+    {
+      "id": "devkitv1_e22",
+      "name": "ESP32 DevKit V1 + EBYTE E22",
+      "chip": "ESP32"
+    },
+    {
+      "id": "heltec_v3",
+      "name": "Heltec WiFi LoRa 32 V3",
+      "chip": "ESP32-S3"
+    },
+    {
+      "id": "tbeam",
+      "name": "TTGO T-Beam",
+      "chip": "ESP32"
+    },
+    {
+      "id": "lilygo_t3_v161",
+      "name": "LilyGo T3 LoRa32 V1.6.1",
+      "chip": "ESP32"
+    }
+  ],
+  "channels": {
+    "dev": {
+      "version": "dev-6ac75f2",
+      "date": "2026-05-14",
+      "manifest_path": "firmware/dev/{board}/manifest.json",
+      "commit_url": "https://github.com/MichTronics/AXLoRaTNC/commit/6ac75f2ad223426ea3ef7ef6bf9fabc8322a7cae"
+    }
+  }
+}
