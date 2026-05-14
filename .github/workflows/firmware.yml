@@ -1,0 +1,223 @@
+name: Firmware Build & Deploy
+
+on:
+  push:
+    branches: [main]          # → dev channel build
+  release:
+    types: [published]        # → stable channel build
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label (default: short SHA)"
+        required: false
+
+# Serialise gh-pages writes so concurrent runs don't overwrite each other.
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # push to gh-pages branch + upload release assets
+
+jobs:
+  # ── 1. Build each board variant in parallel ──────────────────────────────
+  build:
+    name: Build ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: devkitv1_e22
+          - env: heltec_v3
+          - env: tbeam
+          - env: lilygo_t3_v161
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini', 'variants/**/*.ini') }}
+          restore-keys: pio-${{ runner.os }}-${{ matrix.env }}-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Collect binaries
+        run: |
+          mkdir -p staging
+          for f in firmware.bin bootloader.bin partitions.bin; do
+            src=".pio/build/${{ matrix.env }}/$f"
+            [ -f "$src" ] && cp "$src" staging/ || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: staging/
+          retention-days: 30
+
+  # ── 2. Generate manifests, upload release assets, deploy to gh-pages ─────
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Determine channel / version ───────────────────────────────────────
+      - name: Determine channel & version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            CHAN="stable"
+            VER="${{ github.ref_name }}"
+            URL="https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            CHAN="stable"
+            VER="${{ inputs.version }}"
+            URL=""
+          else
+            CHAN="dev"
+            VER="dev-$(git rev-parse --short HEAD)"
+            URL="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          fi
+          echo "channel=$CHAN" >> "$GITHUB_OUTPUT"
+          echo "version=$VER"  >> "$GITHUB_OUTPUT"
+          echo "url=$URL"      >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: _artifacts/
+
+      # ── Generate per-board manifest.json files ────────────────────────────
+      - name: Generate firmware manifests
+        run: |
+          if [ "${{ steps.meta.outputs.channel }}" = "stable" ]; then
+            FW_OUT="_fw/firmware"
+          else
+            FW_OUT="_fw/firmware/dev"
+          fi
+          python3 scripts/gen_manifest.py \
+            --artifacts _artifacts/ \
+            --output    "$FW_OUT" \
+            --version   "${{ steps.meta.outputs.version }}"
+
+      # ── Package & upload release assets (stable only) ─────────────────────
+      - name: Create per-variant ZIPs
+        if: github.event_name == 'release'
+        run: |
+          cd _fw/firmware
+          for d in */; do
+            env="${d%/}"
+            [ -f "$env/firmware.bin" ] || continue
+            zip -j "../../AXLoRaTNC-${env}-${{ steps.meta.outputs.version }}.zip" \
+              "$env"/*.bin "$env/manifest.json"
+            echo "Packaged $env"
+          done
+
+      - name: Upload ZIPs to GitHub Release
+        if: github.event_name == 'release'
+        run: |
+          for zip in AXLoRaTNC-*.zip; do
+            [ -f "$zip" ] && gh release upload "${{ github.ref_name }}" "$zip" --clobber
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Build VitePress (stable only – no need to rebuild on every dev push)
+      - uses: actions/setup-node@v4
+        if: steps.meta.outputs.channel == 'stable'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: website/package.json
+
+      - name: Install & build VitePress
+        if: steps.meta.outputs.channel == 'stable'
+        run: |
+          cd website
+          npm install
+          npm run build
+
+      # ── Get current gh-pages state (partial-update pattern) ──────────────
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: _site
+          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+        id: checkout_pages
+
+      - name: Initialise gh-pages if branch is missing
+        if: steps.checkout_pages.outcome == 'failure'
+        run: mkdir -p _site
+
+      # ── Assemble site ─────────────────────────────────────────────────────
+      # Stable: replace all VitePress content but keep firmware/ intact.
+      - name: Replace VitePress output
+        if: steps.meta.outputs.channel == 'stable'
+        run: |
+          find _site -mindepth 1 -maxdepth 1 \
+            ! -name firmware ! -name .git \
+            -exec rm -rf {} +
+          cp -r website/.vitepress/dist/. _site/
+
+      # Both channels: copy new firmware files (stable → firmware/, dev → firmware/dev/).
+      - name: Copy firmware to site
+        run: |
+          mkdir -p _site/firmware
+          cp -r _fw/firmware/. _site/firmware/
+
+      # ── Update firmware/index.json ────────────────────────────────────────
+      - name: Update firmware index
+        run: |
+          python3 scripts/update_index.py \
+            --index   _site/firmware/index.json \
+            --channel "${{ steps.meta.outputs.channel }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --date    "$(date -u +%Y-%m-%d)" \
+            --url     "${{ steps.meta.outputs.url }}"
+
+      # ── Push to gh-pages ─────────────────────────────────────────────────
+      - name: Commit & push to gh-pages
+        run: |
+          cd _site
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Fresh init when gh-pages branch didn't exist yet.
+          if [ ! -d .git ]; then
+            git init
+            git checkout --orphan gh-pages
+            git remote add origin \
+              "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          else
+            git remote set-url origin \
+              "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          fi
+
+          git add .
+          if git diff --cached --quiet; then
+            echo "Nothing changed — skipping push"
+          else
+            git commit -m "deploy: ${{ steps.meta.outputs.channel }} ${{ steps.meta.outputs.version }}"
+            git push origin gh-pages --force
+          fi
