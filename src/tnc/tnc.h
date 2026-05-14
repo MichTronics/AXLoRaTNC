@@ -242,6 +242,8 @@ class Tnc {
   size_t            escapePos_   = 0;
   bool              kissActive_  = false;
   SerialMode        serialMode_  = SerialMode::Console;
+  uint32_t          baudKiss_    = 9600;
+  uint32_t          baudDed_     = 9600;
 
   // WA8DED host framing state
   uint8_t dedHeader_[3]{};

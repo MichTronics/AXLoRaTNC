@@ -90,8 +90,12 @@ static void formatByteParam(char prefix, uint8_t value, char* out, size_t cap) {
   snprintf(out, cap, "%c %u", prefix, static_cast<unsigned>(value));
 }
 
-static uint32_t baudForMode(SerialMode mode) {
-  return mode == SerialMode::Wa8ded || mode == SerialMode::Kiss ? 9600U : variant::SERIAL_BAUD;
+static bool isValidBaud(uint32_t baud) {
+  static constexpr uint32_t valid[] = {
+    300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600
+  };
+  for (auto v : valid) { if (baud == v) return true; }
+  return false;
 }
 
 
@@ -475,7 +479,7 @@ void Tnc::handleConsoleLine(char* line) {
   if (cmd == nullptr) return;
 
   if (strcmp(cmd, "help") == 0) {
-    Serial.println("Commands: help info callsign mode stats bbs");
+    Serial.println("Commands: help info callsign mode baud stats bbs");
     Serial.println("          radio [freq|corr|sf|bw|cr|power|reset] [val]");
     Serial.println("          duty [on|off|percent]");
     Serial.println("          profile [fast|normal]");
@@ -503,6 +507,37 @@ void Tnc::handleConsoleLine(char* line) {
       Serial.println("mode=console");
     } else {
       Serial.println("usage: mode [console|kiss|ded]");
+    }
+
+  } else if (strcmp(cmd, "baud") == 0) {
+    char* modeArg = strtok(nullptr, " ");
+    char* baudArg = strtok(nullptr, " ");
+    if (modeArg == nullptr) {
+      Serial.printf("baud console=%lu (fixed)\n", static_cast<unsigned long>(variant::SERIAL_BAUD));
+      Serial.printf("baud kiss=%lu\n",    static_cast<unsigned long>(baudKiss_));
+      Serial.printf("baud ded=%lu\n",     static_cast<unsigned long>(baudDed_));
+    } else if (baudArg == nullptr) {
+      Serial.println("usage: baud <kiss|ded> <rate>");
+      Serial.println("valid: 300 1200 2400 4800 9600 19200 38400 57600 115200 230400 460800 921600");
+    } else {
+      const uint32_t rate = static_cast<uint32_t>(atol(baudArg));
+      if (!isValidBaud(rate)) {
+        Serial.println("invalid baud rate");
+      } else if (strcmp(modeArg, "kiss") == 0) {
+        baudKiss_ = rate;
+        Preferences prefs;
+        if (prefs.begin("axloratnc", false)) { prefs.putULong("baud_kiss", baudKiss_); prefs.end(); }
+        Serial.printf("baud kiss=%lu\n", static_cast<unsigned long>(baudKiss_));
+        if (serialMode_ == SerialMode::Kiss) applySerialBaud();
+      } else if (strcmp(modeArg, "ded") == 0 || strcmp(modeArg, "wa8ded") == 0) {
+        baudDed_ = rate;
+        Preferences prefs;
+        if (prefs.begin("axloratnc", false)) { prefs.putULong("baud_ded", baudDed_); prefs.end(); }
+        Serial.printf("baud ded=%lu\n", static_cast<unsigned long>(baudDed_));
+        if (serialMode_ == SerialMode::Wa8ded) applySerialBaud();
+      } else {
+        Serial.println("usage: baud <kiss|ded> <rate>");
+      }
     }
 
   } else if (strcmp(cmd, "callsign") == 0) {
@@ -928,7 +963,9 @@ void Tnc::printInfo() const {
                 static_cast<double>(radioConfig_.frequencyMHz + radioConfig_.frequencyCorrectionMHz));
   Serial.printf("  duty=%s %.3f%%\n", dutyCycleEnabled_ ? "on" : "off",
                 static_cast<double>(dutyCyclePpm_) / 10000.0);
-  Serial.printf("serial mode=%s channels=%u\n", serialModeName(), static_cast<unsigned>(CHANNEL_COUNT));
+  Serial.printf("serial mode=%s channels=%u baud_kiss=%lu baud_ded=%lu\n",
+                serialModeName(), static_cast<unsigned>(CHANNEL_COUNT),
+                static_cast<unsigned long>(baudKiss_), static_cast<unsigned long>(baudDed_));
 }
 
 void Tnc::printStats() const {
@@ -2683,6 +2720,10 @@ void Tnc::loadSettings() {
     char uproto[16]{};
     prefs.getString("d_uproto", uproto, sizeof(uproto));
     if (uproto[0] != '\0') textToAddress(uproto, dedUnprotoDestination_);
+    baudKiss_ = prefs.getULong("baud_kiss", 9600U);
+    baudDed_  = prefs.getULong("baud_ded",  9600U);
+    if (!isValidBaud(baudKiss_)) baudKiss_ = 9600U;
+    if (!isValidBaud(baudDed_))  baudDed_  = 9600U;
     prefs.end();
   }
   if (serialMode_ != SerialMode::Console &&
@@ -2815,7 +2856,10 @@ void Tnc::setSerialMode(SerialMode mode) {
 }
 
 void Tnc::applySerialBaud() {
-  Serial.updateBaudRate(baudForMode(serialMode_));
+  uint32_t baud = variant::SERIAL_BAUD;
+  if (serialMode_ == SerialMode::Kiss)   baud = baudKiss_;
+  if (serialMode_ == SerialMode::Wa8ded) baud = baudDed_;
+  Serial.updateBaudRate(baud);
   // Hardware RTS/CTS flow control: only active in non-console modes where the
   // host may be an old DOS application that drives flow-control lines.
   // Disabled at compile time when PIN_UART_RTS/CTS are -1 (all current variants).
