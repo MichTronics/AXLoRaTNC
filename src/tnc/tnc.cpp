@@ -329,6 +329,25 @@ void Tnc::serviceRadio() {
           ax25::formatAddress(frame.source, src, sizeof(src));
           LOG_INFO("APRS %s: %s", src, aprsSum);
         }
+        // Auto-ACK APRS messages addressed to our callsign
+        if (frame.infoLen > 0 && static_cast<char>(frame.info[0]) == ':') {
+          aprs::AprsMessage msg{};
+          if (aprs::parseMessage(frame.info, frame.infoLen, msg) &&
+              !msg.isAck && !msg.isRej && msg.msgNum[0] != '\0') {
+            char localStr[12]{};
+            ax25::formatAddress(local_, localStr, sizeof(localStr));
+            if (strncasecmp(msg.addressee, localStr, strlen(localStr)) == 0) {
+              char ackInfo[32]{};
+              char senderStr[12]{};
+              ax25::formatAddress(frame.source, senderStr, sizeof(senderStr));
+              if (aprs::encodeMessageAck(senderStr, msg.msgNum, ackInfo, sizeof(ackInfo))) {
+                channels_[0].link.sendUi(frame.source,
+                  reinterpret_cast<const uint8_t*>(ackInfo), strlen(ackInfo));
+                LOG_INFO("APRS ACK sent to %s msgnum=%s", senderStr, msg.msgNum);
+              }
+            }
+          }
+        }
       }
       observeHeard(frame, rx.rssi, rx.snr);
       observeNetrom(frame);

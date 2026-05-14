@@ -23,6 +23,7 @@ struct L2Config {
   uint32_t t1Ms = 3000;
   uint32_t t2Ms = 500;
   uint32_t t3Ms = 30000;
+  uint32_t t4Ms = 60000;  // RNR busy-timeout; 0 = disabled
   uint8_t n2 = 5;
 };
 
@@ -39,6 +40,11 @@ struct L2Stats {
   uint32_t stateChanges = 0;
   uint32_t queued = 0;
   uint32_t queueDrops = 0;
+  uint32_t frmrTx = 0;
+  uint32_t sabmeRx = 0;
+  uint32_t xidRx = 0;
+  uint32_t testRx = 0;
+  uint32_t nrInvalid = 0;
 };
 
 class LinkLayer {
@@ -56,7 +62,7 @@ class LinkLayer {
   size_t connectedQueueFree() const { return txQueue_.free(); }
   uint8_t outstandingFrameCount() const { return outstandingCount(); }
   uint8_t retryCount() const { return retryCount_; }
-  void setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms);
+  void setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms, uint32_t t4Ms = 60000);
   void setRetryLimit(uint8_t n2);
   void setMaxFrame(uint8_t maxFrame);
   void receive(const uint8_t* data, size_t len);
@@ -105,6 +111,9 @@ class LinkLayer {
   void handleS(const Frame& frame);
   void handleU(const Frame& frame);
   void processAck(uint8_t nrValue);
+  bool nrValid(uint8_t nrValue) const;
+  void sendFrmr(uint8_t rejectedControl, bool cr, uint8_t reasonBits);
+  void sendXidResponse(const Frame& rxFrame);
   bool addressedToLocal(const Frame& frame) const;
   static const char* stateName(LinkState state);
 
@@ -126,6 +135,7 @@ class LinkLayer {
   Timer t1_;
   Timer t2_;
   Timer t3_;
+  Timer t4_;  // RNR busy-timeout
   bool  t2PendingAck_ = false;
   uint8_t maxFrame_ = WINDOW_SIZE;
   axlora::util::RingBuffer<QueuedInfo, 6> txQueue_;

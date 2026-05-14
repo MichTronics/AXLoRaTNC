@@ -8,13 +8,17 @@
 namespace axlora::ax25 {
 
 static constexpr uint8_t PID_NO_LAYER3 = 0xF0;
+static constexpr uint8_t PID_ESCAPE    = 0xFF;  // next byte is the real PID
 static constexpr uint16_t MAX_INFO_LEN = 256;
-static constexpr uint8_t CTRL_UI   = 0x03;
-static constexpr uint8_t CTRL_SABM = 0x2F;
-static constexpr uint8_t CTRL_DISC = 0x43;
-static constexpr uint8_t CTRL_DM   = 0x0F;
-static constexpr uint8_t CTRL_UA   = 0x63;
-static constexpr uint8_t CTRL_FRMR = 0x87;
+static constexpr uint8_t CTRL_UI    = 0x03;
+static constexpr uint8_t CTRL_SABM  = 0x2F;
+static constexpr uint8_t CTRL_SABME = 0x6F;  // Set ABM Extended (mod-128)
+static constexpr uint8_t CTRL_DISC  = 0x43;
+static constexpr uint8_t CTRL_DM    = 0x0F;
+static constexpr uint8_t CTRL_UA    = 0x63;
+static constexpr uint8_t CTRL_FRMR  = 0x87;
+static constexpr uint8_t CTRL_XID   = 0xAF;  // Exchange Identification
+static constexpr uint8_t CTRL_TEST  = 0xE3;  // Test (echo)
 
 enum class FrameKind : uint8_t {
   I,
@@ -32,11 +36,14 @@ enum class SFrameType : uint8_t {
 
 enum class UFrameType : uint8_t {
   SABM,
+  SABME,  // Set ABM Extended (mod-128) — AX.25 v2.2
   UA,
   DISC,
   DM,
   UI,
   FRMR,
+  XID,    // Exchange Identification — AX.25 v2.2
+  TEST,   // Test frame (echo) — AX.25 v2.2
   Unknown,
 };
 

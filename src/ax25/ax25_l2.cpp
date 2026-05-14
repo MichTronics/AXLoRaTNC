@@ -31,6 +31,9 @@ void LinkLayer::loop() {
       txQueue_.clear();
       peerBusy_ = false;
       t1_.stop();
+      t2_.stop();
+      t2PendingAck_ = false;
+      t4_.stop();
       setState(LinkState::Disconnected);
       return;
     }
@@ -57,6 +60,13 @@ void LinkLayer::loop() {
   if (state_ == LinkState::Connected && t3_.expired()) {
     sendSupervisory(SFrameType::RR);
     t3_.start(config_.t3Ms);
+  }
+  // T4: probe peer if it has been in RNR (busy) too long
+  if (state_ == LinkState::Connected && peerBusy_ && config_.t4Ms > 0 && t4_.expired()) {
+    LOG_PROTO("AX25 T4: peer busy timeout, probing with RR P=1");
+    sendSupervisory(SFrameType::RR, true);
+    t1_.start(config_.t1Ms);
+    t4_.start(config_.t4Ms);
   }
 }
 
@@ -125,10 +135,11 @@ bool LinkLayer::sendConnected(const uint8_t* data, size_t len) {
   return true;
 }
 
-void LinkLayer::setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms) {
+void LinkLayer::setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms, uint32_t t4Ms) {
   config_.t1Ms = t1Ms;
   config_.t2Ms = t2Ms;
   config_.t3Ms = t3Ms;
+  config_.t4Ms = t4Ms;
 }
 
 void LinkLayer::setRetryLimit(uint8_t n2) {
@@ -373,6 +384,19 @@ void LinkLayer::handleI(const Frame& frame) {
   if (!addressEquals(frame.source, peer_)) {
     return;
   }
+  // Validate N(R): must acknowledge only already-sent frames (AX.25 §4.4.5.1, Z bit)
+  if (!nrValid(nr(frame.control))) {
+    LOG_WARN("AX25 I-frame invalid NR=%u VA=%u VS=%u, sending FRMR", nr(frame.control), va_, vs_);
+    ++stats_.nrInvalid;
+    sendFrmr(frame.control, frame.command, 0x08);  // Z bit
+    clearWindow();
+    clearReceiveBuffer();
+    txQueue_.clear();
+    t1_.stop(); t2_.stop(); t2PendingAck_ = false; t4_.stop();
+    peerBusy_ = false;
+    setState(LinkState::Disconnected);
+    return;
+  }
   if (state_ == LinkState::Recovery) {
     LOG_PROTO("AX25 I-frame received in recovery, returning to connected");
     setState(LinkState::Connected);
@@ -407,12 +431,26 @@ void LinkLayer::handleS(const Frame& frame) {
   if (!addressEquals(frame.source, peer_)) {
     return;
   }
+  // Validate N(R): must acknowledge only already-sent frames (AX.25 §4.4.5.1, Z bit)
+  if (!nrValid(nr(frame.control))) {
+    LOG_WARN("AX25 S-frame invalid NR=%u VA=%u VS=%u, sending FRMR", nr(frame.control), va_, vs_);
+    ++stats_.nrInvalid;
+    sendFrmr(frame.control, frame.command, 0x08);  // Z bit
+    clearWindow();
+    clearReceiveBuffer();
+    txQueue_.clear();
+    t1_.stop(); t2_.stop(); t2PendingAck_ = false; t4_.stop();
+    peerBusy_ = false;
+    setState(LinkState::Disconnected);
+    return;
+  }
   const bool finalBit = (frame.control & 0x10) != 0;
   processAck(nr(frame.control));
   switch (sType(frame.control)) {
     case SFrameType::RR:
       if (peerBusy_) {
         peerBusy_ = false;
+        t4_.stop();
         LOG_PROTO("AX25 peer RNR cleared");
       }
       if (state_ == LinkState::Recovery && finalBit) {
@@ -433,6 +471,9 @@ void LinkLayer::handleS(const Frame& frame) {
     case SFrameType::RNR:
       if (!peerBusy_) {
         peerBusy_ = true;
+        if (config_.t4Ms > 0) {
+          t4_.start(config_.t4Ms);
+        }
         LOG_PROTO("AX25 peer RNR busy");
       }
       if (state_ == LinkState::Recovery && finalBit) {
@@ -468,6 +509,7 @@ void LinkLayer::handleS(const Frame& frame) {
 
 void LinkLayer::handleU(const Frame& frame) {
   const UFrameType type = uType(frame.control);
+
   if (type == UFrameType::UI) {
     ++stats_.uiRx;
     if (data_ != nullptr) {
@@ -475,6 +517,21 @@ void LinkLayer::handleU(const Frame& frame) {
     }
     return;
   }
+
+  // SABME: peer wants mod-128 — we only support mod-8, respond with DM (AX.25 v2.2 §4.3.3.1)
+  if (type == UFrameType::SABME) {
+    ++stats_.sabmeRx;
+    LOG_PROTO("AX25 SABME received (mod-128 not supported), sending DM");
+    peer_ = frame.source;
+    Frame dm{};
+    dm.destination = frame.source;
+    dm.source = config_.local;
+    dm.command = false;
+    dm.control = makeU(UFrameType::DM, true);  // F=1 (final, responding to P=1)
+    transmit(dm, false);
+    return;
+  }
+
   if (type == UFrameType::SABM) {
     peer_ = frame.source;
     vs_ = 0;
@@ -483,6 +540,7 @@ void LinkLayer::handleU(const Frame& frame) {
     peerBusy_ = false;
     t2_.stop();
     t2PendingAck_ = false;
+    t4_.stop();
     clearWindow();
     clearReceiveBuffer();
     txQueue_.clear();
@@ -492,6 +550,7 @@ void LinkLayer::handleU(const Frame& frame) {
     t3_.start(config_.t3Ms);
     return;
   }
+
   if (type == UFrameType::UA) {
     if (state_ == LinkState::Connecting) {
       retryCount_ = 0;
@@ -503,6 +562,7 @@ void LinkLayer::handleU(const Frame& frame) {
       t1_.stop();
       t2_.stop();
       t2PendingAck_ = false;
+      t4_.stop();
       clearWindow();
       clearReceiveBuffer();
       txQueue_.clear();
@@ -510,6 +570,7 @@ void LinkLayer::handleU(const Frame& frame) {
     }
     return;
   }
+
   if (type == UFrameType::DISC) {
     peer_ = frame.source;
     sendUnnumbered(UFrameType::UA);
@@ -517,9 +578,14 @@ void LinkLayer::handleU(const Frame& frame) {
     clearReceiveBuffer();
     txQueue_.clear();
     t1_.stop();
+    t2_.stop();
+    t2PendingAck_ = false;
+    t4_.stop();
+    peerBusy_ = false;
     setState(LinkState::Disconnected);
     return;
   }
+
   if (type == UFrameType::DM) {
     clearWindow();
     clearReceiveBuffer();
@@ -527,11 +593,13 @@ void LinkLayer::handleU(const Frame& frame) {
     t1_.stop();
     t2_.stop();
     t2PendingAck_ = false;
+    t4_.stop();
+    peerBusy_ = false;
     setState(LinkState::Disconnected);
     return;
   }
+
   if (type == UFrameType::FRMR) {
-    // Peer rejected our last frame as invalid — reset the link cleanly.
     LOG_PROTO("AX25 FRMR received, resetting link");
     clearWindow();
     clearReceiveBuffer();
@@ -539,9 +607,51 @@ void LinkLayer::handleU(const Frame& frame) {
     t1_.stop();
     t2_.stop();
     t2PendingAck_ = false;
+    t4_.stop();
     peerBusy_ = false;
     sendUnnumbered(UFrameType::DM);
     setState(LinkState::Disconnected);
+    return;
+  }
+
+  // XID: respond with our mod-8 capabilities (AX.25 v2.2 §4.3.3.8)
+  if (type == UFrameType::XID) {
+    ++stats_.xidRx;
+    if (frame.command) {
+      sendXidResponse(frame);
+    }
+    return;
+  }
+
+  // TEST: echo info field back with F=1 (AX.25 v2.2 §4.3.3.9)
+  if (type == UFrameType::TEST) {
+    ++stats_.testRx;
+    if (frame.command) {
+      Frame resp{};
+      resp.destination = frame.source;
+      resp.source = config_.local;
+      resp.command = false;
+      resp.control = makeU(UFrameType::TEST, true);  // F=1
+      resp.infoLen = frame.infoLen;
+      memcpy(resp.info, frame.info, frame.infoLen);
+      transmit(resp, false);
+      LOG_PROTO("AX25 TEST echo sent len=%u", static_cast<unsigned>(frame.infoLen));
+    }
+    return;
+  }
+
+  // Unknown U-frame: send FRMR (W bit = undefined/not implemented) if connected,
+  // or DM if disconnected (AX.25 v2.2 §4.4.5.1)
+  LOG_WARN("AX25 unknown U-frame ctrl=0x%02X state=%s", frame.control, stateName(state_));
+  if (state_ == LinkState::Connected || state_ == LinkState::Recovery) {
+    sendFrmr(frame.control, frame.command, 0x01);  // W bit
+  } else {
+    Frame dm{};
+    dm.destination = frame.source;
+    dm.source = config_.local;
+    dm.command = false;
+    dm.control = makeU(UFrameType::DM, true);
+    transmit(dm, false);
   }
 }
 
@@ -572,6 +682,60 @@ void LinkLayer::processAck(uint8_t nrValue) {
     }
     fillWindow();
   }
+}
+
+bool LinkLayer::nrValid(uint8_t nrValue) const {
+  // NR must acknowledge only frames already sent: VA <= NR <= VS (mod 8)
+  return seqDistance(va_, nrValue) <= seqDistance(va_, vs_);
+}
+
+void LinkLayer::sendFrmr(uint8_t rejectedControl, bool cr, uint8_t reasonBits) {
+  // FRMR is always a response, F=1
+  Frame frame{};
+  frame.destination = peer_;
+  frame.source = config_.local;
+  frame.command = false;
+  frame.control = makeU(UFrameType::FRMR, true);
+  // 3-byte FRMR info: [rejected ctrl] [VR|CR|VS] [reason W/X/Y/Z]
+  frame.info[0] = rejectedControl;
+  frame.info[1] = static_cast<uint8_t>((vr_ << 5) | (cr ? 0x10 : 0x00) | (vs_ << 1));
+  frame.info[2] = reasonBits;
+  frame.infoLen = 3;
+  transmit(frame, false);
+  ++stats_.frmrTx;
+  LOG_PROTO("AX25 FRMR tx ctrl=0x%02X reason=0x%02X", rejectedControl, reasonBits);
+}
+
+void LinkLayer::sendXidResponse(const Frame& rxFrame) {
+  // Respond with XID advertising mod-8 capabilities (AX.25 v2.2 §4.3.3.8)
+  Frame frame{};
+  frame.destination = rxFrame.source;
+  frame.source = config_.local;
+  frame.command = false;  // response
+  frame.control = makeU(UFrameType::XID, true);  // F=1
+  uint8_t* p = frame.info;
+  *p++ = 0x82;  // FI: HDLC Format Identifier
+  *p++ = 0x80;  // GI: Parameter Group Identifier
+  *p++ = 0x00;  // GL high byte (filled below)
+  uint8_t* glLow = p++;  // GL low byte placeholder
+  const uint8_t* paramStart = p;
+  // Classes of Procedures: ABM half-duplex (0x0020)
+  *p++ = 0x02; *p++ = 0x02; *p++ = 0x00; *p++ = 0x20;
+  // HDLC Optional Functions: mod-8, basic I-frames
+  *p++ = 0x03; *p++ = 0x03; *p++ = 0x86; *p++ = 0xA8; *p++ = 0x02;
+  // I-field Length Receive: 256 bytes = 2048 bits (big-endian)
+  *p++ = 0x06; *p++ = 0x02; *p++ = 0x08; *p++ = 0x00;
+  // Window Size Receive
+  *p++ = 0x07; *p++ = 0x01; *p++ = maxFrame_;
+  // Acknowledgement Timer (T1, ms)
+  const uint16_t t1 = static_cast<uint16_t>(config_.t1Ms > 0xFFFF ? 0xFFFF : config_.t1Ms);
+  *p++ = 0x08; *p++ = 0x02; *p++ = static_cast<uint8_t>(t1 >> 8); *p++ = static_cast<uint8_t>(t1);
+  // Retries (N2)
+  *p++ = 0x09; *p++ = 0x01; *p++ = config_.n2;
+  *glLow = static_cast<uint8_t>(p - paramStart);
+  frame.infoLen = static_cast<size_t>(p - frame.info);
+  transmit(frame, false);
+  LOG_PROTO("AX25 XID response sent");
 }
 
 bool LinkLayer::addressedToLocal(const Frame& frame) const {

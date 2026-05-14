@@ -29,14 +29,19 @@ uint8_t makeS(SFrameType type, uint8_t nrValue, bool poll) {
 uint8_t makeU(UFrameType type, bool poll) {
   uint8_t base = CTRL_DM;
   switch (type) {
-    case UFrameType::SABM: base = CTRL_SABM; break;
-    case UFrameType::UA: base = CTRL_UA; break;
-    case UFrameType::DISC: base = CTRL_DISC; break;
-    case UFrameType::DM: base = CTRL_DM; break;
-    case UFrameType::UI: base = CTRL_UI; break;
+    case UFrameType::SABM:  base = CTRL_SABM;  break;
+    case UFrameType::SABME: base = CTRL_SABME; break;
+    case UFrameType::UA:    base = CTRL_UA;    break;
+    case UFrameType::DISC:  base = CTRL_DISC;  break;
+    case UFrameType::DM:    base = CTRL_DM;    break;
+    case UFrameType::UI:    base = CTRL_UI;    break;
+    case UFrameType::XID:   base = CTRL_XID;   break;
+    case UFrameType::TEST:  base = CTRL_TEST;  break;
     default: break;
   }
-  if (!poll) {
+  if (poll) {
+    base |= 0x10;
+  } else {
     base &= static_cast<uint8_t>(~0x10);
   }
   return base;
@@ -48,12 +53,15 @@ SFrameType sType(uint8_t control) { return static_cast<SFrameType>((control >> 2
 
 UFrameType uType(uint8_t control) {
   switch (control & static_cast<uint8_t>(~0x10)) {
-    case CTRL_SABM & static_cast<uint8_t>(~0x10): return UFrameType::SABM;
-    case CTRL_UA   & static_cast<uint8_t>(~0x10): return UFrameType::UA;
-    case CTRL_DISC & static_cast<uint8_t>(~0x10): return UFrameType::DISC;
-    case CTRL_DM   & static_cast<uint8_t>(~0x10): return UFrameType::DM;
-    case CTRL_UI   & static_cast<uint8_t>(~0x10): return UFrameType::UI;
-    case CTRL_FRMR & static_cast<uint8_t>(~0x10): return UFrameType::FRMR;
+    case CTRL_SABM  & static_cast<uint8_t>(~0x10): return UFrameType::SABM;
+    case CTRL_SABME & static_cast<uint8_t>(~0x10): return UFrameType::SABME;
+    case CTRL_UA    & static_cast<uint8_t>(~0x10): return UFrameType::UA;
+    case CTRL_DISC  & static_cast<uint8_t>(~0x10): return UFrameType::DISC;
+    case CTRL_DM    & static_cast<uint8_t>(~0x10): return UFrameType::DM;
+    case CTRL_UI    & static_cast<uint8_t>(~0x10): return UFrameType::UI;
+    case CTRL_FRMR  & static_cast<uint8_t>(~0x10): return UFrameType::FRMR;
+    case CTRL_XID   & static_cast<uint8_t>(~0x10): return UFrameType::XID;
+    case CTRL_TEST  & static_cast<uint8_t>(~0x10): return UFrameType::TEST;
     default: return UFrameType::Unknown;
   }
 }
@@ -81,7 +89,10 @@ bool encodeFrame(const Frame& frame, uint8_t* out, size_t outCap, size_t& outLen
     p += 7;
   }
   raw[p++] = frame.control;
-  if (kind(frame.control) == FrameKind::I || uType(frame.control) == UFrameType::UI) {
+  // PID field present for I-frames and UI/XID frames; TEST carries info but no PID
+  if (kind(frame.control) == FrameKind::I ||
+      uType(frame.control) == UFrameType::UI ||
+      uType(frame.control) == UFrameType::XID) {
     raw[p++] = frame.pid;
   }
   if (p + frame.infoLen + (includeFcs ? 2 : 0) > outCap || p + frame.infoLen > sizeof(raw)) {
@@ -125,11 +136,21 @@ bool decodeFrame(const uint8_t* data, size_t len, Frame& out, bool expectFcs) {
     return false;
   }
   out.control = data[p++];
-  if (kind(out.control) == FrameKind::I || uType(out.control) == UFrameType::UI) {
+  // PID field present for I-frames and UI/XID frames; TEST carries info but no PID
+  if (kind(out.control) == FrameKind::I ||
+      uType(out.control) == UFrameType::UI ||
+      uType(out.control) == UFrameType::XID) {
     if (p >= frameLen) {
       return false;
     }
     out.pid = data[p++];
+    // PID 0xFF is an escape: the next byte is the real PID (AX.25 §3.3.3)
+    if (out.pid == PID_ESCAPE) {
+      if (p >= frameLen) {
+        return false;
+      }
+      out.pid = data[p++];
+    }
   }
   out.infoLen = frameLen - p;
   if (out.infoLen > MAX_INFO_LEN) {
