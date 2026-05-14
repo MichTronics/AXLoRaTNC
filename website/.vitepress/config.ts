@@ -5,6 +5,9 @@ export default defineConfig({
   description: 'AX.25 packet-radio TNC for ESP32 + LoRa',
   base: '/AXLoRaTNC/',
 
+  // /flash/ is a static HTML file in public/ — not a VitePress page.
+  ignoreDeadLinks: [/\/flash\//],
+
   head: [
     ['link', { rel: 'icon', href: '/AXLoRaTNC/favicon.svg' }],
   ],
