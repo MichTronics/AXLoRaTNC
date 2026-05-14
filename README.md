@@ -17,7 +17,7 @@ Use the browser-based installer — no drivers or tools needed. Works in Chrome 
 | ESP32 DevKit V1 + EBYTE E22 | ESP32 | SX1262 | `devkitv1_e22` | ✅ tested |
 | Heltec WiFi LoRa 32 V3 | ESP32-S3 | SX1262 | `heltec_v3` | ⚠ not tested |
 | TTGO T-Beam | ESP32 | SX1276 | `tbeam` | ⚠ not tested |
-| LilyGo T3 LoRa32 V1.6.1 | ESP32 | SX1276 | `lilygo_t3_v161` | ⚠ not tested |
+| LilyGo T3 LoRa32 V1.6.1 | ESP32 | SX1276 | `lilygo_t3_v161` | ✅ tested |
 
 ## Build from source
 
