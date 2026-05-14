@@ -32,7 +32,7 @@ void drawRow(uint8_t y, const char* lhs, const char* rhs = nullptr) {
 
 // Common header: callsign (left) + "MODE p/P" (right), then a divider.
 void drawHeader(const axlora::display::DisplayInfo& info) {
-  char modeTag[10]{};
+  char modeTag[12]{};
   snprintf(modeTag, sizeof(modeTag), "%s %u/%u", info.mode, sPage + 1, PAGE_COUNT);
   drawRow(10, info.callsign, modeTag);
   u8g2.drawHLine(0, 12, 128);
