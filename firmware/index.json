@@ -29,10 +29,10 @@
       "commit_url": "https://github.com/MichTronics/AXLoRaTNC/commit/05d3767fc7158b5c1ebffe311d7cf77881f1fe13"
     },
     "stable": {
-      "version": "v0.1.0",
+      "version": "v0.1.1",
       "date": "2026-05-14",
       "manifest_path": "firmware/{board}/manifest.json",
-      "release_url": "https://github.com/MichTronics/AXLoRaTNC/releases/tag/v0.1.0"
+      "release_url": "https://github.com/MichTronics/AXLoRaTNC/releases/tag/v0.1.1"
     }
   }
 }
