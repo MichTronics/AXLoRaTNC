@@ -2630,6 +2630,7 @@ void Tnc::printNetromRoutes() const {
 // ---------------------------------------------------------------------------
 
 void Tnc::fillDisplayInfo(display::DisplayInfo& out) const {
+  // ---- page 1 ----
   ax25::formatAddress(local_, out.callsign, sizeof(out.callsign));
 
   const char* mname = serialModeName();
@@ -2666,6 +2667,84 @@ void Tnc::fillDisplayInfo(display::DisplayInfo& out) const {
     }
     break;
   }
+
+  // ---- page 2: RF config + baud rates ----
+  out.bandwidthKhz = radioConfig_.bandwidthKhz;
+  out.codingRate   = radioConfig_.codingRate;
+  out.baudKiss     = baudKiss_;
+  out.baudDed      = baudDed_;
+
+  // ---- page 3: AX.25 stats aggregated across all channels ----
+  out.l2Retries    = 0;
+  out.l2FcsDrops   = 0;
+  out.l2RejTx      = 0;
+  out.l2SrejTx     = 0;
+  out.l2FrmrTx     = 0;
+  out.l2QueueDrops = 0;
+  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
+    const ax25::L2Stats& s = channels_[i].link.stats();
+    out.l2Retries    += s.retries;
+    out.l2FcsDrops   += s.fcsDrops;
+    out.l2RejTx      += s.rejTx;
+    out.l2SrejTx     += s.srejTx;
+    out.l2FrmrTx     += s.frmrTx;
+    out.l2QueueDrops += s.queueDrops;
+  }
+  out.freeHeapBytes = static_cast<uint32_t>(ESP.getFreeHeap());
+
+  // ---- page 4: mheard — top MHEARD_COUNT stations by most recent ----
+  {
+    const uint32_t now = axlora::util::nowMs();
+    struct { uint32_t t; int idx; } sorted[20]{};
+    uint8_t total = 0;
+    for (int i = 0; i < 20; ++i) {
+      if (mheard_[i].active) {
+        sorted[total].t   = mheard_[i].lastHeardMs;
+        sorted[total].idx = i;
+        ++total;
+      }
+    }
+    // Bubble sort descending by time (at most 20 entries — negligible cost)
+    for (uint8_t i = 0; i < total; ++i) {
+      for (uint8_t j = static_cast<uint8_t>(i + 1); j < total; ++j) {
+        if (sorted[j].t > sorted[i].t) {
+          auto tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp;
+        }
+      }
+    }
+    for (uint8_t i = 0; i < display::DisplayInfo::MHEARD_COUNT; ++i) {
+      out.mheard[i].active = false;
+    }
+    const uint8_t fill = total < display::DisplayInfo::MHEARD_COUNT
+                       ? total
+                       : display::DisplayInfo::MHEARD_COUNT;
+    for (uint8_t i = 0; i < fill; ++i) {
+      const MheardEntry& m = mheard_[sorted[i].idx];
+      out.mheard[i].active = true;
+      ax25::formatAddress(m.source, out.mheard[i].call, sizeof(out.mheard[i].call));
+      out.mheard[i].rssi  = m.lastRssi;
+      out.mheard[i].snr   = m.lastSnr;
+      out.mheard[i].agoMs = now - m.lastHeardMs;
+    }
+  }
+
+  // ---- page 5: services ----
+  out.digiEnabled      = digi_.enabled;
+  out.digiTx           = digiTx_;
+  out.beaconEnabled    = beacon_.enabled;
+  out.beaconTx         = beaconTx_;
+  out.beaconIntervalMs = beacon_.intervalMs;
+  out.netromEnabled    = netrom_.enabled;
+  out.netromRoutes     = 0;
+  for (const NetromRoute& r : netromRoutes_) {
+    if (r.active) ++out.netromRoutes;
+  }
+  out.bbsMsgCount = 0;
+  for (uint8_t i = 0; i < mailbox_.maxMessages(); ++i) {
+    const Mailbox::Message* m = mailbox_.get(i);
+    if (m && m->active) ++out.bbsMsgCount;
+  }
+  out.uptimeMs = axlora::util::nowMs();
 }
 
 // ---------------------------------------------------------------------------
