@@ -1,6 +1,6 @@
 {
   "name": "AXLoRaTNC \u2013 TTGO T-Beam (SX1276)",
-  "version": "dev-05d3767",
+  "version": "dev-fca9f7a",
   "new_install_prompt_erase": true,
   "builds": [
     {

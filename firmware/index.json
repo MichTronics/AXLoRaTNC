@@ -19,14 +19,19 @@
       "id": "lilygo_t3_v161",
       "name": "LilyGo T3 LoRa32 V1.6.1",
       "chip": "ESP32"
+    },
+    {
+      "id": "tbeam_supreme_433",
+      "name": "LILYGO T-Beam SUPREME 433MHz",
+      "chip": "ESP32-S3"
     }
   ],
   "channels": {
     "dev": {
-      "version": "dev-05d3767",
-      "date": "2026-05-14",
+      "version": "dev-fca9f7a",
+      "date": "2026-05-15",
       "manifest_path": "firmware/dev/{board}/manifest.json",
-      "commit_url": "https://github.com/MichTronics/AXLoRaTNC/commit/05d3767fc7158b5c1ebffe311d7cf77881f1fe13"
+      "commit_url": "https://github.com/MichTronics/AXLoRaTNC/commit/fca9f7a3d3d2241e8f989f58c4769aeb1fc551d2"
     },
     "stable": {
       "version": "v0.1.1",
