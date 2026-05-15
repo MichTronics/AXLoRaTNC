@@ -232,9 +232,9 @@ USB serial accepts standard KISS framing (`0xC0` FEND). KISS data frames are tre
 
 KISS parameter frames (TxDelay, Persistence, SlotTime, FullDuplex) are accepted and drive the CSMA algorithm.
 
-Compatible with: F6FBB, BPQ/LinBPQ, `kissattach`, Dire Wolf, APRS clients.
+Compatible with: F6FBB/LinFBB, BPQ/LinBPQ, `kissattach`, Dire Wolf, APRS clients.
 
-For a working LinBPQ/BPQ32 setup, see [docs/BPQ.md](docs/BPQ.md). A complete example config is in [examples/bpq32-axloratnc.cfg](examples/bpq32-axloratnc.cfg).
+For a working LinFBB/F6FBB setup, use KISS through Linux AX.25 and see [docs/FBB-KISS.md](docs/FBB-KISS.md). For LinBPQ/BPQ32, see [docs/BPQ.md](docs/BPQ.md). A complete BPQ example config is in [examples/bpq32-axloratnc.cfg](examples/bpq32-axloratnc.cfg).
 
 ---
 
@@ -302,7 +302,7 @@ All parameters persist in NVS across reboots.
 
 Monitor frame format: `FM SRC TO DST [VIA R1,R2] <TYPE> RSSI=x SNR=y[:info]`
 
-Compatible with: F6FBB (host type `D`), TFPCX/TSTHOST, WinPack, BPQ32/LinBPQ (port type `DED`), JNOS, Graphic Packet, PaxTerm.
+Legacy hostmode compatibility target: TFPCX/TSTHOST, WinPack, BPQ32/LinBPQ (port type `DED`), JNOS, Graphic Packet, PaxTerm. For F6FBB/LinFBB, KISS through Linux AX.25 is recommended.
 
 For full protocol details see [website/guide/wa8ded](https://michtronics.github.io/AXLoRaTNC/guide/wa8ded).
 

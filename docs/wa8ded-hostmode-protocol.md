@@ -44,7 +44,7 @@ Every frame exchanged between host and TNC has the same structure:
 | `G0`    | n       | Poll for data events (code 7) only |
 | `G1`    | n       | Poll for status events (code 3) only |
 | `L`     | n       | Query link statistics for channel n |
-| `@B`    | n       | Query free TX buffer bytes |
+| `@B`    | n       | Query free TX buffers |
 | `C CALL`| n       | Connect to CALL on channel n |
 | `D`     | n       | Disconnect channel n |
 | `I CALL`| 0       | Set local callsign |
@@ -79,6 +79,11 @@ The `wait[can]` counter tracks how many events are still expected:
 
 **Channel matching is strict**: LinFBB sends the poll on channel N and expects the
 response to carry the same channel byte. A mismatch triggers a resync/error.
+
+LinFBB treats the `@B` response as a count of transmit buffers, not a byte count:
+`kernel.c` stores it as `mem = atoi(response) << 5`, then decrements `sta.mem`
+once per DATA frame queued to the driver. AXLoRaTNC therefore reports complete
+PACLEN-sized frame slots that can be accepted by the AX.25 queue.
 
 ---
 
@@ -259,18 +264,18 @@ A non-zero `ret=` count indicates T1 retries are happening.
 
 ## KISS monitor output (TX echo)
 
-In WA8DED and Console modes the firmware echoes **received** radio frames as
-KISS data frames on the serial port, so a monitoring tool (e.g. GraphicPacket)
-connected to the same or a second port can observe traffic.
+In Console mode the firmware echoes radio frames as KISS data frames on the
+serial port, so a monitoring tool can observe traffic before a host protocol is
+selected. WA8DED hostmode does not emit KISS monitor bytes on the same serial
+stream, because that would corrupt the host protocol and can make LinFBB wait
+for a resync before processing connect events.
 
-Since firmware version after 2026-05, **transmitted** frames are also echoed
-as KISS frames immediately after successful radio TX (`serviceRawTx`).
-This means both sides of every QSO appear in the KISS stream:
+Both received and transmitted frames appear in the Console-mode KISS stream:
 
 ```
 Radio RX  →  emitKissData() called in serviceRadio()
 Radio TX  →  emitKissData() called in serviceRawTx() after send() succeeds
 ```
 
-In pure KISS mode the TX echo is suppressed (the KISS host already knows
-what it sent).
+In pure KISS mode the TX echo is suppressed because the KISS host already knows
+what it sent.

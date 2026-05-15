@@ -1,0 +1,35 @@
+# LinFBB / F6FBB example for AXLoRaTNC through Linux AX.25 KISS
+#
+# Pair this with /etc/ax25/axports:
+#
+#   axlora  YOURCALL-3  115200  64  1  AXLoRaTNC KISS
+#
+# Attach the ESP32 serial KISS TNC before starting LinFBB:
+#
+#   sudo kissattach /dev/serial/by-id/YOUR_AXLORATNC axlora
+#   sudo kissparms -p axlora -c 1 -t 0 -s 10 -r 255
+#
+# In AXLoRaTNC console:
+#
+#   mode console
+#   callsign YOURCALL-0
+#   radio reset
+#   profile fast
+#   mode kiss
+
+# Ports TNCs
+1      1
+
+# Com Interface Address Baud
+# Interface 9 = Linux AX.25 sockets
+1      9         0      115200
+
+# TNC NbCh Com MultCh Pacln Maxfr NbFwd MxBloc M/P-Fwd Mode  Freq
+# MultCh must match the axports name.
+1     4    1   axlora   64    1     1     10     00/60   XUWY  LoRa
+
+# Special callsigns and modes for some channels
+# TNC Nbs Callsign-SSID Mode
+# 1   1   YOURCALL-1    B
+
+# End of file
