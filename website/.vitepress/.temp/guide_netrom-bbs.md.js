@@ -1,0 +1,46 @@
+import { ssrRenderAttrs } from "vue/server-renderer";
+import { useSSRContext } from "vue";
+import { _ as _export_sfc } from "./plugin-vue_export-helper.1tPrXgE0.js";
+const __pageData = JSON.parse('{"title":"NET/ROM & BBS","description":"","frontmatter":{},"headers":[],"relativePath":"guide/netrom-bbs.md","filePath":"guide/netrom-bbs.md"}');
+const _sfc_main = { name: "guide/netrom-bbs.md" };
+function _sfc_ssrRender(_ctx, _push, _parent, _attrs, $props, $setup, $data, $options) {
+  _push(`<div${ssrRenderAttrs(_attrs)}><h1 id="net-rom-bbs" tabindex="-1">NET/ROM &amp; BBS <a class="header-anchor" href="#net-rom-bbs" aria-label="Permalink to &quot;NET/ROM &amp; BBS&quot;">​</a></h1><h2 id="net-rom-node" tabindex="-1">NET/ROM node <a class="header-anchor" href="#net-rom-node" aria-label="Permalink to &quot;NET/ROM node&quot;">​</a></h2><div class="language-text vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang">text</span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>node                          # show config</span></span>
+<span class="line"><span>node on / off</span></span>
+<span class="line"><span>node alias AXLORA             # NET/ROM alias (up to 6 chars)</span></span>
+<span class="line"><span>node ident &lt;text&gt;             # node identification string</span></span>
+<span class="line"><span>node interval &lt;seconds&gt;       # NODES broadcast interval (60–86400 s)</span></span>
+<span class="line"><span>node broadcast                # send NODES broadcast now</span></span>
+<span class="line"><span>nodes                         # show learned route table</span></span>
+<span class="line"><span>routes                        # same as nodes</span></span></code></pre></div><p>Routes expire automatically after <code>interval × 6</code> seconds (NET/ROM obsolescence rule). The route table holds up to 20 entries.</p><h2 id="node-shell" tabindex="-1">Node shell <a class="header-anchor" href="#node-shell" aria-label="Permalink to &quot;Node shell&quot;">​</a></h2><p>When a station connects over AX.25 connected mode, the node shell answers:</p><div class="language-text vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang">text</span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>?         # command list</span></span>
+<span class="line"><span>INFO      # node identification</span></span>
+<span class="line"><span>NODES     # known NET/ROM routes</span></span>
+<span class="line"><span>ROUTES    # same</span></span>
+<span class="line"><span>MHEARD    # heard station table</span></span>
+<span class="line"><span>BBS       # enter mailbox shell</span></span>
+<span class="line"><span>BYE / B   # disconnect</span></span></code></pre></div><h2 id="mailbox-bbs" tabindex="-1">Mailbox (BBS) <a class="header-anchor" href="#mailbox-bbs" aria-label="Permalink to &quot;Mailbox (BBS)&quot;">​</a></h2><p>From the node shell, type <code>BBS</code> to enter the mailbox.</p><div class="language-text vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang">text</span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>L         # list all messages (number, timestamp, from, to, status)</span></span>
+<span class="line"><span>LT        # list messages addressed to you</span></span>
+<span class="line"><span>R &lt;n&gt;     # read message n</span></span>
+<span class="line"><span>S &lt;CALL&gt;  # compose a message to CALL (end with an empty line)</span></span>
+<span class="line"><span>K &lt;n&gt;     # delete message n (only your own callsign)</span></span>
+<span class="line"><span>X / EXIT  # back to node shell</span></span>
+<span class="line"><span>B / BYE   # disconnect</span></span></code></pre></div><p>Messages are stored in NVS: up to <strong>12 messages</strong>, <strong>200 characters</strong> each, with sender, recipient, body, read flag, and uptime timestamp.</p><h3 id="sysop-access-local-console" tabindex="-1">Sysop access (local console) <a class="header-anchor" href="#sysop-access-local-console" aria-label="Permalink to &quot;Sysop access (local console)&quot;">​</a></h3><div class="language-text vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang">text</span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>bbs        # list all messages regardless of recipient</span></span></code></pre></div><h2 id="ax-25-connected-mode-commands" tabindex="-1">AX.25 connected mode commands <a class="header-anchor" href="#ax-25-connected-mode-commands" aria-label="Permalink to &quot;AX.25 connected mode commands&quot;">​</a></h2><div class="language-text vp-adaptive-theme"><button title="Copy Code" class="copy"></button><span class="lang">text</span><pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>connect N0CALL-1           # connect on channel 1</span></span>
+<span class="line"><span>connect 2 N0CALL-2         # connect on channel 2 (1–8)</span></span>
+<span class="line"><span>disconnect                 # disconnect channel 1</span></span>
+<span class="line"><span>disconnect 2               # disconnect channel 2</span></span>
+<span class="line"><span>send hello                 # send on channel 1</span></span>
+<span class="line"><span>send 2 hello               # send on channel 2</span></span>
+<span class="line"><span>sendui CQ hello world      # send UI frame</span></span>
+<span class="line"><span>ax25                       # show status of all active channels</span></span>
+<span class="line"><span>stats                      # full statistics</span></span></code></pre></div></div>`);
+}
+const _sfc_setup = _sfc_main.setup;
+_sfc_main.setup = (props, ctx) => {
+  const ssrContext = useSSRContext();
+  (ssrContext.modules || (ssrContext.modules = /* @__PURE__ */ new Set())).add("guide/netrom-bbs.md");
+  return _sfc_setup ? _sfc_setup(props, ctx) : void 0;
+};
+const netromBbs = /* @__PURE__ */ _export_sfc(_sfc_main, [["ssrRender", _sfc_ssrRender]]);
+export {
+  __pageData,
+  netromBbs as default
+};

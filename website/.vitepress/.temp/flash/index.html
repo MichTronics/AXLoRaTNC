@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AXLoRaTNC – Web Installer</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+</head>
+<body>
+
+  <header>
+    <a class="back" href="/AXLoRaTNC/">← AXLoRaTNC docs</a>
+    <h1>AXLoRaTNC</h1>
+    <p class="tagline">AX.25 packet-radio TNC for ESP32 + LoRa<br>
+      AX.25 Level&nbsp;2 connected mode &bull; KISS &bull; WA8DED &bull; APRS &bull; NET/ROM</p>
+  </header>
+
+  <main>
+
+    <!-- ── Step 1: channel ─────────────────────────────────── -->
+    <section class="step">
+      <h2><span class="step-num">1</span> Choose channel</h2>
+      <div class="channel-row">
+
+        <label class="channel-card selected" id="lbl-stable">
+          <input type="radio" name="channel" value="stable" checked />
+          <div class="channel-body">
+            <span class="channel-name">Stable</span>
+            <span class="channel-badge badge-stable">recommended</span>
+            <span class="channel-ver" id="ver-stable">loading…</span>
+          </div>
+        </label>
+
+        <label class="channel-card" id="lbl-dev">
+          <input type="radio" name="channel" value="dev" />
+          <div class="channel-body">
+            <span class="channel-name">Dev</span>
+            <span class="channel-badge badge-dev">latest main</span>
+            <span class="channel-ver" id="ver-dev">loading…</span>
+          </div>
+        </label>
+
+      </div>
+      <p class="channel-link" id="channel-link"></p>
+    </section>
+
+    <!-- ── Step 2: board ───────────────────────────────────── -->
+    <section class="step">
+      <h2><span class="step-num">2</span> Select your board</h2>
+      <div class="board-grid" id="board-grid">
+
+        <label class="board-card selected">
+          <input type="radio" name="board" value="devkitv1_e22" checked />
+          <div class="card-body">
+            <div class="board-name">ESP32 DevKit&nbsp;V1<br>+ EBYTE&nbsp;E22</div>
+            <div class="board-chip">ESP32 · SX1262</div>
+          </div>
+        </label>
+
+        <label class="board-card">
+          <input type="radio" name="board" value="heltec_v3" />
+          <div class="card-body">
+            <div class="board-name">Heltec WiFi<br>LoRa&nbsp;32&nbsp;V3</div>
+            <div class="board-chip">ESP32-S3 · SX1262</div>
+            <div class="board-untested">⚠ not tested</div>
+          </div>
+        </label>
+
+        <label class="board-card">
+          <input type="radio" name="board" value="tbeam" />
+          <div class="card-body">
+            <div class="board-name">TTGO<br>T-Beam</div>
+            <div class="board-chip">ESP32 · SX1276</div>
+            <div class="board-untested">⚠ not tested</div>
+          </div>
+        </label>
+
+        <label class="board-card">
+          <input type="radio" name="board" value="lilygo_t3_v161" />
+          <div class="card-body">
+            <div class="board-name">LilyGo T3<br>LoRa32&nbsp;V1.6.1</div>
+            <div class="board-chip">ESP32 · SX1276</div>
+          </div>
+        </label>
+
+        <label class="board-card">
+          <input type="radio" name="board" value="tbeam_supreme_433" />
+          <div class="card-body">
+            <div class="board-name">LILYGO T-Beam<br>SUPREME&nbsp;433MHz</div>
+            <div class="board-chip">ESP32-S3 · SX1262</div>
+            <div class="board-untested">⚠ not tested</div>
+          </div>
+        </label>
+
+      </div>
+    </section>
+
+    <!-- ── Step 3: flash ───────────────────────────────────── -->
+    <section class="step">
+      <h2><span class="step-num">3</span> Connect &amp; flash</h2>
+      <p class="hint">Plug your board into USB. Use <strong>Chrome</strong> or <strong>Edge</strong> — Web Serial is not supported in Firefox or Safari.</p>
+
+      <div class="flash-row">
+        <esp-web-install-button id="install-btn" manifest="../firmware/devkitv1_e22/manifest.json">
+          <button slot="activate" class="install-btn">Install AXLoRaTNC</button>
+          <span slot="unsupported">
+            Your browser does not support Web Serial.
+            Use <a href="https://www.google.com/chrome/" target="_blank">Chrome</a> or
+            <a href="https://www.microsoft.com/edge" target="_blank">Edge</a>.
+          </span>
+        </esp-web-install-button>
+      </div>
+
+      <p class="status-line" id="status-line"></p>
+    </section>
+
+    <!-- ── Step 4: first use ───────────────────────────────── -->
+    <section class="step">
+      <h2><span class="step-num">4</span> First use</h2>
+      <ol>
+        <li>Open a serial monitor at <strong>115&nbsp;200&nbsp;baud</strong>.</li>
+        <li>Set your callsign: <code>callsign N0CALL-0</code></li>
+        <li>Check radio defaults: <code>radio</code></li>
+        <li>Attach a KISS client (kissattach, Dire Wolf, BPQ) or switch to WA8DED: <code>mode ded</code></li>
+      </ol>
+      <p>Full documentation: <a href="/AXLoRaTNC/guide/">Guide</a> &bull;
+         <a href="https://github.com/MichTronics/AXLoRaTNC#readme" target="_blank">README on GitHub</a></p>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>
+      <a href="https://github.com/MichTronics/AXLoRaTNC" target="_blank">GitHub</a> &bull;
+      <a href="https://github.com/MichTronics/AXLoRaTNC/releases" target="_blank">Releases</a> &bull;
+      <a href="/AXLoRaTNC/guide/bpq">BPQ/LinBPQ setup</a>
+    </p>
+    <p class="small">AXLoRaTNC is open-source firmware. Flash at your own risk. Comply with local radio regulations.</p>
+  </footer>
+
+  <script>
+    // ── State ─────────────────────────────────────────────────────────────
+    let indexData  = null;
+    let channel    = 'stable';
+    let board      = 'devkitv1_e22';
+
+    const installBtn  = document.getElementById('install-btn');
+    const statusLine  = document.getElementById('status-line');
+    const channelLink = document.getElementById('channel-link');
+
+    // ── Load index.json ───────────────────────────────────────────────────
+    async function loadIndex() {
+      try {
+        const r = await fetch('../firmware/index.json');
+        if (!r.ok) throw new Error(r.status);
+        indexData = await r.json();
+        renderChannelInfo();
+      } catch {
+        document.getElementById('ver-stable').textContent = 'unavailable';
+        document.getElementById('ver-dev').textContent    = 'unavailable';
+      }
+    }
+
+    function renderChannelInfo() {
+      const ch = indexData?.channels ?? {};
+
+      const stable = ch.stable;
+      document.getElementById('ver-stable').textContent =
+        stable ? stable.version : 'none';
+
+      const dev = ch.dev;
+      document.getElementById('ver-dev').textContent =
+        dev ? dev.version : 'none';
+
+      updateManifest();
+    }
+
+    // ── Compute & set manifest URL ────────────────────────────────────────
+    function updateManifest() {
+      const ch   = indexData?.channels?.[channel];
+      const tmpl = ch?.manifest_path ?? (
+        channel === 'stable'
+          ? 'firmware/{board}/manifest.json'
+          : 'firmware/dev/{board}/manifest.json'
+      );
+      const rel = '../' + tmpl.replace('{board}', board);
+      installBtn.manifest = rel;
+      updateStatusLine(ch);
+    }
+
+    function updateStatusLine(ch) {
+      if (!ch) {
+        statusLine.textContent = channel === 'dev'
+          ? 'Dev firmware not yet available — trigger a push to main first.'
+          : '';
+        return;
+      }
+      const date = ch.date ? ` · ${ch.date}` : '';
+      statusLine.textContent = `${ch.version}${date}`;
+
+      const url = ch.release_url ?? ch.commit_url ?? '';
+      channelLink.innerHTML = url
+        ? `<a href="${url}" target="_blank">View on GitHub →</a>`
+        : '';
+    }
+
+    // ── Channel toggle ────────────────────────────────────────────────────
+    document.querySelectorAll('input[name="channel"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        channel = radio.value;
+        document.querySelectorAll('.channel-card').forEach(c => c.classList.remove('selected'));
+        radio.closest('.channel-card').classList.add('selected');
+        updateManifest();
+      });
+    });
+
+    // ── Board cards ───────────────────────────────────────────────────────
+    document.querySelectorAll('input[name="board"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        board = radio.value;
+        document.querySelectorAll('.board-card').forEach(c => c.classList.remove('selected'));
+        radio.closest('.board-card').classList.add('selected');
+        updateManifest();
+      });
+    });
+
+    loadIndex();
+  </script>
+
+</body>
+</html>

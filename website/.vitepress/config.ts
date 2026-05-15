@@ -17,7 +17,7 @@ export default defineConfig({
 
     nav: [
       { text: 'Guide',   link: '/guide/' },
-      { text: 'Flash',   link: '/AXLoRaTNC/flash/', target: '_self' },
+      { text: 'Flash',   link: '/flash/', target: '_self' },
       { text: 'GitHub',  link: 'https://github.com/MichTronics/AXLoRaTNC' },
       { text: 'Releases',link: 'https://github.com/MichTronics/AXLoRaTNC/releases' },
     ],

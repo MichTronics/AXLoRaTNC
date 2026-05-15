@@ -1,0 +1,297 @@
+/* ── Reset / base ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --bg-card:   #161b22;
+  --bg-hover:  #1c2330;
+  --border:    #30363d;
+  --accent:    #238636;
+  --accent-h:  #2ea043;
+  --text:      #e6edf3;
+  --muted:     #8b949e;
+  --link:      #58a6ff;
+  --radius:    8px;
+  --max-w:     760px;
+}
+
+html { font-size: 16px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.875em;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* ── Header ───────────────────────────────────────────── */
+header {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  padding: 2.5rem 1.5rem 2rem;
+  text-align: center;
+}
+
+header h1 {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 0.5rem;
+}
+
+.tagline {
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+/* ── Main ─────────────────────────────────────────────── */
+main {
+  flex: 1;
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 2rem 1.25rem;
+  width: 100%;
+}
+
+/* ── Steps ────────────────────────────────────────────── */
+.step {
+  margin-bottom: 2.5rem;
+}
+
+.step h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ── Board cards ──────────────────────────────────────── */
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+  gap: 0.75rem;
+}
+
+.board-card {
+  cursor: pointer;
+  display: block;
+}
+
+.board-card input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.card-body {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  transition: border-color 0.15s, background 0.15s;
+  height: 100%;
+}
+
+.board-card:hover .card-body {
+  background: var(--bg-hover);
+  border-color: #58a6ff55;
+}
+
+.board-card.selected .card-body {
+  border-color: var(--accent);
+  background: #1a2e1f;
+}
+
+.board-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  margin-bottom: 0.35rem;
+}
+
+.board-chip {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.board-untested {
+  font-size: 0.72rem;
+  color: #e3b341;
+  margin-top: 0.3rem;
+}
+
+/* ── Flash row ────────────────────────────────────────── */
+.hint {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin-bottom: 1.25rem;
+}
+
+.flash-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.install-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.65rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.install-btn:hover { background: var(--accent-h); }
+
+.status-line {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 0.6rem;
+}
+
+.channel-link {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+}
+.channel-link a { color: var(--link); }
+
+/* ── Channel cards ────────────────────────────────────── */
+.channel-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.channel-card {
+  cursor: pointer;
+  display: block;
+  min-width: 160px;
+}
+
+.channel-card input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.channel-body {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.channel-card:hover .channel-body {
+  background: var(--bg-hover);
+  border-color: #58a6ff55;
+}
+
+.channel-card.selected .channel-body {
+  border-color: var(--accent);
+  background: #1a2e1f;
+}
+
+.channel-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.channel-badge {
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.badge-stable { background: #1f6feb44; color: #58a6ff; }
+.badge-dev    { background: #6e40c944; color: #bc8cff; }
+
+.channel-ver {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+/* ── First use steps ──────────────────────────────────── */
+.step ol {
+  padding-left: 1.35rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.step ol li { margin-bottom: 0.35rem; }
+.step ol strong { color: var(--text); }
+.step > p { color: var(--muted); font-size: 0.9rem; }
+.step > p a { color: var(--link); }
+
+/* ── Footer ───────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--border);
+  text-align: center;
+  padding: 1.5rem 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+footer p + p { margin-top: 0.4rem; }
+footer .small { font-size: 0.78rem; }
+footer a { color: var(--muted); }
+footer a:hover { color: var(--link); text-decoration: underline; }
+
+/* ── Responsive ───────────────────────────────────────── */
+@media (max-width: 500px) {
+  header h1 { font-size: 1.75rem; }
+  .board-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* ── Back link ────────────────────────────────────────── */
+.back {
+  display: inline-block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+  text-decoration: none;
+}
+.back:hover { color: var(--link); }
