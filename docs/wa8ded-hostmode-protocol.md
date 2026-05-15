@@ -163,13 +163,13 @@ before the remote station had even received the frame.
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| FRACK (T1) | 800 → 8000 ms | Via `F 800` |
-| Window (MAXFRAME) | 1 | Via `O 1` — never pipeline on LoRa |
-| Retries (N2) | 10 | Via `N 10` |
-| PACLEN | 64 | Per I-frame payload |
-| TxDelay | 100 → 1000 ms | RX→TX guard time |
+| FRACK (T1) | 500 → 5000 ms | Via `F 500` |
+| Window (MAXFRAME) | 3 | Via `O 3` for Michel's fast lab profile |
+| Retries (N2) | 20 | Via `N 20` |
+| PACLEN | 128 | Per I-frame payload |
+| TxDelay | 0 | Lab profile uses no TX delay |
 | Persistence | 255 | Transmit immediately |
-| SlotTime | 20 → 200 ms | CSMA slot |
+| SlotTime | 1 → 10 ms | Short CSMA slot for lab testing |
 
 ---
 
@@ -199,7 +199,7 @@ event queue (16 of 32 slots) for link-status and data events.
 | 15              | RR / UA / SABM      | ~46 ms       |
 | 32              | small I-frame       | ~70 ms       |
 | 64              | PACLEN=64 I-frame   | ~118 ms      |
-| 128             | large I-frame       | ~210 ms      |
+| 128             | PACLEN=128 I-frame  | ~210 ms      |
 
 For SF10/BW125 multiply by ~8×; for SF12/BW125 multiply by ~27×.
 

@@ -64,13 +64,14 @@ Create or edit `/etc/ax25/axports`:
 
 ```text
 # name    callsign    speed  paclen  window  description
-axlora    YOURCALL-3  115200 64      1       AXLoRaTNC KISS
+axlora    YOURCALL-3  115200 128     3       AXLoRaTNC KISS
 ```
 
 Notes:
 
-- `paclen=64` keeps LoRa airtime short.
-- `window=1` avoids pipelining frames into a half-duplex LoRa path.
+- Michel's current lab profile uses `paclen=128` and `window=3` for faster
+  LinFBB text transfer.
+- If retries or missing text rise, first try `window=2`, then `paclen=96`.
 - The `speed` field is used by Linux AX.25 tools; AXLoRaTNC itself uses USB
   serial at 115200.
 
@@ -105,7 +106,7 @@ Minimal example:
 1      9         0      115200
 
 # TNC NbCh Com MultCh Pacln Maxfr NbFwd MxBloc M/P-Fwd Mode  Freq
-1     4    1   axlora   64    1     1     10     00/60   XUWY  LoRa
+1     4    1   axlora   128   3     1     10     00/60   XUWY  LoRa
 
 # TNC Nbs Callsign-SSID Mode
 # 1   1   YOURCALL-1    B
@@ -121,8 +122,8 @@ Important values:
 
 - `Interface 9` means LinFBB uses Linux AX.25 sockets.
 - `MultCh axlora` must match the name in `/etc/ax25/axports`.
-- `Pacln 64` should match or stay close to the AX.25 port paclen.
-- `Maxfr 1` is recommended for LoRa.
+- `Pacln 128` should match or stay close to the AX.25 port paclen.
+- `Maxfr 3` matches the current fast lab profile.
 - `NbFwd 1` keeps forwarding conservative until the link is proven stable.
 
 ## Basic test
@@ -165,15 +166,15 @@ If `raw_rx` rises on AXLoRaTNC but `axlisten` is quiet, check that the TNC is
 still in `mode kiss` and that `kissattach` is attached to the correct serial
 device.
 
-If LinFBB sends text too slowly, first confirm `Maxfr 1`, `Pacln 64`, and the
+If LinFBB sends text too slowly, first confirm `Maxfr 3`, `Pacln 128`, and the
 `kissparms` values above. Then check RF retries with AXLoRaTNC `stats` and the
 remote station's monitor.
 
 If pieces of text are missing, check `stats` on both TNCs. `qdrops` must stay at
 zero. A rising `qdrops` counter means the KISS host is feeding frames faster than
-the LoRa side can transmit them. Lower `Pacln` to 40-64, keep `Maxfr/window` at
-1, and make sure both TNCs were configured with `profile fast` or equivalent
-KISS parameters.
+the LoRa side can transmit them. First lower `Maxfr/window` to 2, then lower
+`Pacln` to 96 or 64, and make sure both TNCs were configured with `profile fast`
+or equivalent KISS parameters.
 
 ## Reference sources
 
