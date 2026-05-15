@@ -25,7 +25,7 @@ void LinkLayer::begin(const L2Config& config, TxCallback tx, DataCallback data, 
 void LinkLayer::loop() {
   if (t1_.expired()) {
     if (config_.n2 != 0 && retryCount_ >= config_.n2) {
-      LOG_PROTO("AX25 N2 exceeded, disconnecting");
+      LOG_PROTO("AX25 T1 N2=%u exceeded state=%s → Disconnected", config_.n2, stateName(state_));
       clearWindow();
       clearReceiveBuffer();
       txQueue_.clear();
@@ -39,6 +39,8 @@ void LinkLayer::loop() {
     }
     ++retryCount_;
     ++stats_.retries;
+    LOG_PROTO("AX25 T1 expired state=%s retry=%u/%u outstanding=%u",
+              stateName(state_), retryCount_, config_.n2, outstandingCount());
     if (state_ == LinkState::Connected && hasOutstanding()) {
       t2_.stop();
       t2PendingAck_ = false;
@@ -150,6 +152,16 @@ void LinkLayer::setMaxFrame(uint8_t maxFrame) {
   if (maxFrame == 0) maxFrame = 1;
   if (maxFrame > WINDOW_SIZE) maxFrame = WINDOW_SIZE;
   maxFrame_ = maxFrame;
+}
+
+void LinkLayer::notifyTxSent() {
+  // Restart T1 from now — corrects for async TX queue delay (CSMA + LoRa airtime).
+  // T1 was started when the frame was queued; restart it when the frame is actually on air.
+  if (t1_.running()) {
+    LOG_PROTO("AX25 T1 restarted from air-TX state=%s t1=%lums", stateName(state_),
+              static_cast<unsigned long>(config_.t1Ms));
+    t1_.start(config_.t1Ms);
+  }
 }
 
 bool LinkLayer::setLocalAddress(const Address& local) {
@@ -373,13 +385,21 @@ void LinkLayer::deferAck() {
   }
 }
 
-bool LinkLayer::sendSupervisoryNr(SFrameType type, uint8_t nrValue, bool poll) {
+bool LinkLayer::sendSupervisoryFrame(SFrameType type, uint8_t nrValue, bool pf, bool command) {
   Frame frame{};
   frame.destination = peer_;
   frame.source = config_.local;
-  frame.command = poll;   // poll=true → command, poll=false → response
-  frame.control = makeS(type, nrValue, poll);
+  frame.command = command;
+  frame.control = makeS(type, nrValue, pf);
   return transmit(frame, false);
+}
+
+bool LinkLayer::sendSupervisoryNr(SFrameType type, uint8_t nrValue, bool poll) {
+  return sendSupervisoryFrame(type, nrValue, poll, poll);
+}
+
+bool LinkLayer::sendSupervisoryFinal(SFrameType type, uint8_t nrValue) {
+  return sendSupervisoryFrame(type, nrValue, true, false);
 }
 
 bool LinkLayer::sendSupervisory(SFrameType type, bool poll) {
@@ -431,18 +451,30 @@ void LinkLayer::handleI(const Frame& frame) {
     while (receiveBuffered(vr_, buffered)) {
       deliverIFrame(buffered);
     }
-    deferAck();
+    if (frame.command && ((frame.control & 0x10) != 0)) {
+      sendSupervisoryFinal(SFrameType::RR, vr_);
+    } else {
+      deferAck();
+    }
   } else if (inReceiveWindow(ns(frame.control)) && storeReceiveBuffered(frame)) {
     LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending SREJ", ns(frame.control), vr_);
     if (!srejPending_[vr_]) {
       srejPending_[vr_] = true;
       ++stats_.srejTx;
-      sendSupervisoryNr(SFrameType::SREJ, vr_);
+      if (frame.command && ((frame.control & 0x10) != 0)) {
+        sendSupervisoryFinal(SFrameType::SREJ, vr_);
+      } else {
+        sendSupervisoryNr(SFrameType::SREJ, vr_);
+      }
     }
   } else {
     LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending REJ", ns(frame.control), vr_);
     ++stats_.rejTx;
-    sendSupervisory(SFrameType::REJ);
+    if (frame.command && ((frame.control & 0x10) != 0)) {
+      sendSupervisoryFinal(SFrameType::REJ, vr_);
+    } else {
+      sendSupervisory(SFrameType::REJ);
+    }
   }
 }
 
@@ -468,6 +500,9 @@ void LinkLayer::handleS(const Frame& frame) {
   }
   const bool finalBit = (frame.control & 0x10) != 0;
   processAck(nr(frame.control));
+  if (frame.command && finalBit) {
+    sendSupervisoryFinal(SFrameType::RR, vr_);
+  }
   switch (sType(frame.control)) {
     case SFrameType::RR:
       if (peerBusy_) {
@@ -555,6 +590,7 @@ void LinkLayer::handleU(const Frame& frame) {
   }
 
   if (type == UFrameType::SABM) {
+    const bool wasConnected = (state_ == LinkState::Connected || state_ == LinkState::Recovery);
     peer_ = frame.source;
     vs_ = 0;
     va_ = 0;
@@ -567,6 +603,11 @@ void LinkLayer::handleU(const Frame& frame) {
     clearReceiveBuffer();
     txQueue_.clear();
     t1_.stop();
+    if (wasConnected) {
+      LOG_PROTO("AX25 SABM rx while %s → sequences reset (re-SABM)", stateName(state_));
+    } else {
+      LOG_PROTO("AX25 SABM rx state=%s → Connected", stateName(state_));
+    }
     setState(LinkState::Connected);
     sendUnnumbered(UFrameType::UA);
     t3_.start(config_.t3Ms);
@@ -575,6 +616,7 @@ void LinkLayer::handleU(const Frame& frame) {
 
   if (type == UFrameType::UA) {
     if (state_ == LinkState::Connecting) {
+      LOG_PROTO("AX25 UA rx → Connected (retry=%u)", retryCount_);
       retryCount_ = 0;
       t1_.stop();
       setState(LinkState::Connected);

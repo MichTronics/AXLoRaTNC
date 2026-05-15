@@ -60,11 +60,18 @@ class LinkLayer {
   bool sendConnected(const uint8_t* data, size_t len);
   size_t connectedQueueSize() const { return txQueue_.size(); }
   size_t connectedQueueFree() const { return txQueue_.free(); }
+  size_t connectedWindowFree() const {
+    const uint8_t outstanding = outstandingCount();
+    return outstanding < maxFrame_ ? static_cast<size_t>(maxFrame_ - outstanding) : 0;
+  }
+  bool connectedPeerBusy() const { return peerBusy_; }
   uint8_t outstandingFrameCount() const { return outstandingCount(); }
   uint8_t retryCount() const { return retryCount_; }
   void setTimers(uint32_t t1Ms, uint32_t t2Ms, uint32_t t3Ms, uint32_t t4Ms = 60000);
   void setRetryLimit(uint8_t n2);
   void setMaxFrame(uint8_t maxFrame);
+  // Call after the frame actually goes on air so T1 counts from real transmission.
+  void notifyTxSent();
   void receive(const uint8_t* data, size_t len);
   void printStats() const;
   void printStatus() const;
@@ -106,7 +113,9 @@ class LinkLayer {
   bool inReceiveWindow(uint8_t nsValue) const;
   void deliverIFrame(const Frame& frame);
   void deferAck();
+  bool sendSupervisoryFrame(SFrameType type, uint8_t nrValue, bool pf, bool command);
   bool sendSupervisoryNr(SFrameType type, uint8_t nrValue, bool poll = false);
+  bool sendSupervisoryFinal(SFrameType type, uint8_t nrValue);
   bool sendSupervisory(SFrameType type, bool poll = false);
   bool sendUnnumbered(UFrameType type);
   void handleI(const Frame& frame);

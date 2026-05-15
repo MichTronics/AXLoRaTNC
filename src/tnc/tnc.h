@@ -16,9 +16,9 @@ namespace axlora::tnc {
 static constexpr uint8_t CHANNEL_COUNT = 8;
 
 struct KissParams {
-  uint8_t txDelay    = 30;
-  uint8_t persistence = 63;
-  uint8_t slotTime   = 10;
+  uint8_t txDelay    = 100;   // 1000 ms — LoRa RX-to-TX switching guard
+  uint8_t persistence = 255;  // transmit immediately (LoRa: no collision risk on single freq)
+  uint8_t slotTime   = 20;    // 200 ms slot
   uint8_t fullDuplex = 0;
 };
 
@@ -133,6 +133,7 @@ class Tnc {
     uint8_t  data[MAX_PACKET_BYTES]{};
     size_t   len         = 0;
     uint32_t notBeforeMs = 0;
+    uint8_t  chIdx       = 0xFF;  // 0xFF = not a link-layer frame
   };
 
   // Static LinkLayer callbacks
@@ -140,8 +141,8 @@ class Tnc {
   static void dataCallback(const uint8_t* data, size_t len, bool connected, void* ctx);
 
   // Radio helpers
-  bool transmitRaw(const uint8_t* data, size_t len);
-  bool enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs);
+  bool transmitRaw(const uint8_t* data, size_t len, uint8_t chIdx = 0xFF);
+  bool enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs, uint8_t chIdx = 0xFF);
   void serviceRawTx(bool radioReady);
   void serviceRadio();
   int  findChannelForIncoming(const ax25::Frame& frame) const;
@@ -171,6 +172,7 @@ class Tnc {
   void sendDedShort(uint8_t channel, uint8_t code);
   void sendDedText(uint8_t channel, uint8_t code, const char* text);
   void sendDedCounted(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
+  unsigned dedFreeBufferBytes(uint8_t channel) const;
   bool enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   size_t pendingDedEvents(uint8_t channel, uint8_t wanted = 0);
   bool popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out);
@@ -269,18 +271,18 @@ class Tnc {
   uint8_t dedSelectedChannel_  = 0;
   uint8_t dedMaxIncoming_      = 4;
   uint16_t dedDamaTimeout_     = 120;
-  uint16_t dedFrack_           = 250;
+  uint16_t dedFrack_           = 800;   // T1 = 8000 ms — LoRa round-trip can exceed 4 s
   uint8_t dedHeardMode_        = 0;
-  uint8_t dedRetryLimit_       = 10;
-  uint8_t dedMaxFrame_         = 2;
+  uint8_t dedRetryLimit_       = 10;    // N2 retries
+  uint8_t dedMaxFrame_         = 1;     // window=1 — LoRa links must not pipeline
   bool    dedTxEnabled_        = true;
   uint8_t dedSrttA1_           = 7;
   uint8_t dedSrttA2_           = 15;
   uint8_t dedSrttA3_           = 3;
-  uint8_t dedIPollFrameLength_ = 60;
+  uint8_t dedIPollFrameLength_ = 64;    // PACLEN for LoRa
   bool    dedEightBitTerminal_ = true;
   bool    dedValidateCallsign_ = true;
-  uint16_t dedT2_              = 150;
+  uint16_t dedT2_              = 30;    // T2 = 300 ms — ACK within one LoRa slot
   uint16_t dedT3_              = 18000;
   ax25::Address dedUnprotoDestination_{};
   char    dedMonitorMode_[20]  = "IU";

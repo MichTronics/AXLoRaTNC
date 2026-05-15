@@ -238,17 +238,17 @@ bool Tnc::isChannelBusy() const {
   return !axlora::util::elapsed(axlora::util::nowMs(), lastRxMs_, windowMs < 100 ? 100 : windowMs);
 }
 
-bool Tnc::transmitRaw(const uint8_t* data, size_t len) {
+bool Tnc::transmitRaw(const uint8_t* data, size_t len, uint8_t chIdx) {
   if (!dedTxEnabled_) {
     return false;
   }
   const uint32_t delayMs = (kissParams_.fullDuplex == 0)
       ? static_cast<uint32_t>(kissParams_.txDelay) * 10
       : 0;
-  return enqueueRawTx(data, len, delayMs);
+  return enqueueRawTx(data, len, delayMs, chIdx);
 }
 
-bool Tnc::enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs) {
+bool Tnc::enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs, uint8_t chIdx) {
   if (data == nullptr || len == 0 || len > MAX_PACKET_BYTES) {
     ++rawTxQueueDrops_;
     return false;
@@ -258,6 +258,7 @@ bool Tnc::enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs) {
   memcpy(tx.data, data, len);
   tx.len = len;
   tx.notBeforeMs = axlora::util::nowMs() + delayMs;
+  tx.chIdx = chIdx;
 
   if (!rawTxQueue_.push(tx)) {
     ++rawTxQueueDrops_;
@@ -294,6 +295,15 @@ void Tnc::serviceRawTx(bool radioReady) {
   if (result == radio::Result::Ok) {
     rawTxQueue_.pop(tx);
     ++rawTx_;
+    // Echo transmitted frame on KISS so monitoring tools (e.g. GraphicPacket) see TX frames.
+    // Skip in KISS mode: the KISS host supplied the frame and doesn't need it echoed back.
+    if (serialMode_ != SerialMode::Kiss && tx.len >= 2) {
+      emitKissData(tx.data, tx.len - 2);
+    }
+    // Restart T1 from now — frame is on air. Corrects for CSMA + LoRa airtime delay.
+    if (tx.chIdx < CHANNEL_COUNT) {
+      channels_[tx.chIdx].link.notifyTxSent();
+    }
     nextRawTxAttemptMs_ = axlora::util::nowMs();
     return;
   }
@@ -309,7 +319,7 @@ void Tnc::serviceRawTx(bool radioReady) {
 
 bool Tnc::radioTxCallback(const uint8_t* data, size_t len, void* ctx) {
   ChannelCtx* ch = static_cast<ChannelCtx*>(ctx);
-  return ch->tnc->transmitRaw(data, len);
+  return ch->tnc->transmitRaw(data, len, ch->chIdx);
 }
 
 void Tnc::dataCallback(const uint8_t* data, size_t len, bool connected, void* ctx) {
@@ -377,7 +387,17 @@ void Tnc::serviceRadio() {
   lastRssi_ = rx.rssi;
   lastSnr_  = rx.snr;
   ++rawRx_;
-  if (rx.len >= 2 && ax25::checkFcs(rx.data, rx.len)) {
+  if (rx.len < 2 || !ax25::checkFcs(rx.data, rx.len)) {
+    if (rx.len > 0) {
+      LOG_RADIO("rx FCS error len=%u rssi=%.0f snr=%.0f",
+                static_cast<unsigned>(rx.len),
+                static_cast<double>(rx.rssi), static_cast<double>(rx.snr));
+    }
+    return;
+  }
+  {  // FCS OK
+    LOG_RADIO("rx ok len=%u rssi=%.0f snr=%.0f", static_cast<unsigned>(rx.len),
+              static_cast<double>(rx.rssi), static_cast<double>(rx.snr));
     emitKissData(rx.data, rx.len - 2);
     if (serialMode_ == SerialMode::Kiss) return;
     ax25::Frame frame{};
@@ -1137,6 +1157,7 @@ void Tnc::checkLinkStatusEvents() {
   for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
     const ax25::LinkState state = channels_[i].link.state();
     if (state == channels_[i].lastState) continue;
+    const ax25::LinkState prevState = channels_[i].lastState;
     channels_[i].lastState = state;
 
     if (state == ax25::LinkState::Disconnected || state == ax25::LinkState::Recovery) {
@@ -1165,37 +1186,49 @@ void Tnc::checkLinkStatusEvents() {
       }
     }
 
-    if (state == ax25::LinkState::Connecting ||
-        state == ax25::LinkState::Connected ||
-        state == ax25::LinkState::Disconnecting ||
-        state == ax25::LinkState::Disconnected ||
-        state == ax25::LinkState::Recovery) {
+    // Emit WA8DED host-mode status events (code 3).
+    // Rules derived from LinFBB kernel.c message() parser:
+    //   "CONNECTED to CALL"        → con_voie(): opens session
+    //   "LINK RESET to station X"  → ignored by LinFBB (session stays open)
+    //   "LINK FAILURE with CALL"   → dec_voie(): closes session
+    //   "DISCONNECTED fm CALL"     → dec_voie(): closes session
+    //   "DISCONNECTING fm CALL"    → dec_voie(): closes session PREMATURELY (don't send)
+    //   Recovery state             → internal/transient; must NOT be reported or LinFBB
+    //                                closes the session before the link can self-heal.
+    {
       char peer[12]{};
       ax25::formatAddress(channels_[i].link.peer(), peer, sizeof(peer));
+      const char* p = peer[0] != '\0' ? peer : "-";
       char text[64]{};
       switch (state) {
         case ax25::LinkState::Connecting:
-          snprintf(text, sizeof(text), "(%u) LINK RESET to station %s",
-                   channel, peer[0] != '\0' ? peer : "-");
+          // Outgoing SABM in flight – LinFBB ignores "LINK RESET", session stays open.
+          snprintf(text, sizeof(text), "(%u) LINK RESET to station %s", channel, p);
           break;
         case ax25::LinkState::Connected:
-          snprintf(text, sizeof(text), "(%u) CONNECTED to %s",
-                   channel, peer[0] != '\0' ? peer : "-");
+          // Only fire "CONNECTED" for genuinely new connections, not Recovery→Connected.
+          if (prevState == ax25::LinkState::Disconnected ||
+              prevState == ax25::LinkState::Connecting) {
+            snprintf(text, sizeof(text), "(%u) CONNECTED to %s", channel, p);
+          }
           break;
         case ax25::LinkState::Disconnecting:
-          snprintf(text, sizeof(text), "(%u) DISCONNECTING fm %s",
-                   channel, peer[0] != '\0' ? peer : "-");
+          // Do not report – LinFBB's 'D' handler closes the session on any "DISCONNECTING"
+          // message, which would happen before the DISC/UA exchange completes.
           break;
         case ax25::LinkState::Disconnected:
-          snprintf(text, sizeof(text), "(%u) DISCONNECTED fm %s",
-                   channel, peer[0] != '\0' ? peer : "-");
+          // Distinguish retry-exhaustion (Recovery→Disconnected) from clean disconnect.
+          if (prevState == ax25::LinkState::Recovery) {
+            snprintf(text, sizeof(text), "(%u) LINK FAILURE with %s", channel, p);
+          } else {
+            snprintf(text, sizeof(text), "(%u) DISCONNECTED fm %s", channel, p);
+          }
           break;
         case ax25::LinkState::Recovery:
-          snprintf(text, sizeof(text), "(%u) LINK FAILURE with %s",
-                   channel, peer[0] != '\0' ? peer : "-");
+          // Recovery is internal: T1 fired, retrying. Do NOT tell LinFBB – it would
+          // call dec_voie() ("LINK FAILURE") and tear down the session prematurely.
           break;
         default:
-          text[0] = '\0';
           break;
       }
       if (text[0] != '\0') {
@@ -1992,16 +2025,7 @@ void Tnc::handleDedAtCommand(const char* cmd) {
   if (strcmp(token, "A2") == 0) { setU8("A2", dedSrttA2_, 0, 255); return; }
   if (strcmp(token, "A3") == 0) { setU8("A3", dedSrttA3_, 1, 255); return; }
   if (strcmp(token, "B") == 0) {
-    // Report free TX-queue capacity in bytes for the selected channel.
-    // FBB/TFPCX use this to throttle how much data they inject at once.
-    const uint8_t chIdx = (dedSelectedChannel_ > 0 && dedSelectedChannel_ <= CHANNEL_COUNT)
-                          ? dedSelectedChannel_ - 1 : 0;
-    const size_t freeSlots = channels_[chIdx].link.connectedQueueFree();
-    const uint32_t freeBytes = freeSlots * static_cast<uint32_t>(
-        dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : ax25::MAX_INFO_LEN);
-    // Cap at 255 — classic WA8DED TNCs return a single byte value.
-    const unsigned reported = freeBytes > 255 ? 255 : static_cast<unsigned>(freeBytes);
-    Serial.printf("@B %u\r\n", reported);
+    Serial.printf("@B %u\r\n", dedFreeBufferBytes(dedSelectedChannel_));
     return;
   }
   if (strcmp(token, "D") == 0) {
@@ -2275,13 +2299,40 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
   if (cmd[0] == '@') {
     const char* token = cmd + 1;
     if (token[0] == 'B' && (token[1] == '\0' || token[1] == ' ')) {
-      const uint8_t chIdx = (channel >= 1 && channel <= CHANNEL_COUNT) ? channel - 1 : 0;
-      const size_t freeSlots = channels_[chIdx].link.connectedQueueFree();
-      const uint32_t freeBytes = freeSlots * static_cast<uint32_t>(
-          dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : ax25::MAX_INFO_LEN);
       char text[8]{};
-      snprintf(text, sizeof(text), "%u", freeBytes > 255 ? 255U : static_cast<unsigned>(freeBytes));
+      snprintf(text, sizeof(text), "%u", dedFreeBufferBytes(channel));
       sendDedText(channel, 1, text);
+      return;
+    }
+    // @D — diagnostic dump: per-channel L2 state + radio counters
+    if (token[0] == 'D' && (token[1] == '\0' || token[1] == ' ')) {
+      char buf[256]{};
+      size_t pos = 0;
+      for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
+        const ax25::LinkLayer& lnk = channels_[i].link;
+        if (lnk.state() == ax25::LinkState::Disconnected) continue;
+        char peer[12]{};
+        ax25::formatAddress(lnk.peer(), peer, sizeof(peer));
+        const char* st = lnk.state() == ax25::LinkState::Connected    ? "CON" :
+                         lnk.state() == ax25::LinkState::Connecting    ? "CONN" :
+                         lnk.state() == ax25::LinkState::Recovery      ? "REC" :
+                         lnk.state() == ax25::LinkState::Disconnecting ? "DISC" : "?";
+        pos += snprintf(buf + pos, sizeof(buf) - pos,
+                        "ch%u %s %s ret=%u\n",
+                        static_cast<unsigned>(i + 1), st, peer,
+                        static_cast<unsigned>(lnk.retryCount()));
+        if (pos >= sizeof(buf) - 1) break;
+      }
+      const auto& rs = radio::stats();
+      pos += snprintf(buf + pos, sizeof(buf) - pos,
+                      "radio rxOk=%lu rxFail=%lu txOk=%lu txFail=%lu rssi=%.0f snr=%.0f",
+                      static_cast<unsigned long>(rs.rxOk),
+                      static_cast<unsigned long>(rs.rxFail),
+                      static_cast<unsigned long>(rs.txOk),
+                      static_cast<unsigned long>(rs.txFail),
+                      static_cast<double>(lastRssi_),
+                      static_cast<double>(lastSnr_));
+      sendDedText(channel, 1, buf);
       return;
     }
     sendDedText(channel, 2, "INVALID COMMAND");
@@ -2433,6 +2484,28 @@ void Tnc::sendDedCounted(uint8_t channel, uint8_t code, const uint8_t* data, siz
   if (capped > 0) Serial.write(data, capped);
 }
 
+unsigned Tnc::dedFreeBufferBytes(uint8_t channel) const {
+  const unsigned packetBytes = static_cast<unsigned>(
+      dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : ax25::MAX_INFO_LEN);
+
+  auto channelCanAccept = [&](uint8_t chIdx) {
+    if (chIdx >= CHANNEL_COUNT) return false;
+    const ax25::LinkLayer& link = channels_[chIdx].link;
+    if (link.connectedPeerBusy() || link.connectedQueueFree() == 0) return false;
+    if (link.state() != ax25::LinkState::Connected) return true;
+    return link.connectedQueueSize() == 0;
+  };
+
+  if (channel >= 1 && channel <= CHANNEL_COUNT) {
+    return channelCanAccept(channel - 1) ? (packetBytes > 255U ? 255U : packetBytes) : 0U;
+  }
+
+  for (uint8_t chIdx = 0; chIdx < CHANNEL_COUNT; ++chIdx) {
+    if (channelCanAccept(chIdx)) return packetBytes > 255U ? 255U : packetBytes;
+  }
+  return 0;
+}
+
 bool Tnc::enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len) {
   DedEvent event{};
   event.channel = channel;
@@ -2448,7 +2521,7 @@ size_t Tnc::pendingDedEvents(uint8_t channel, uint8_t wanted) {
   for (size_t i = 0; i < count; ++i) {
     DedEvent event{};
     if (!dedEvents_.pop(event)) return pending;
-    const bool channelOk = (channel == 0) || (event.channel == channel);
+    const bool channelOk = event.channel == channel;
     const bool typeOk = (wanted == 0) || (event.code == wanted);
     if (channelOk && typeOk) ++pending;
     dedEvents_.push(event);
@@ -2461,8 +2534,9 @@ bool Tnc::popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out) {
   for (size_t i = 0; i < count; ++i) {
     DedEvent event{};
     if (!dedEvents_.pop(event)) return false;
-    // channel==0 means "any channel"
-    const bool channelOk = (channel == 0) || (event.channel == channel);
+    // LinFBB validates that the returned channel equals the channel it polled.
+    // Channel 0 is therefore a real hostmode channel here, not a wildcard.
+    const bool channelOk = event.channel == channel;
     const bool typeOk    = (wanted == 0)  || (event.code == wanted);
     if (channelOk && typeOk) { out = event; return true; }
     dedEvents_.push(event);
