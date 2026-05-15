@@ -6,8 +6,8 @@
 #
 # Attach the ESP32 serial KISS TNC before starting LinFBB:
 #
-#   sudo kissattach /dev/serial/by-id/YOUR_AXLORATNC axlora
-#   sudo kissparms -p axlora -c 1 -t 0 -s 10 -r 255
+#   sudo kissattach /dev/ttyACM0 axlora
+#   sudo kissparms -p axlora -c 1 -f n -t 0 -s 10 -r 255
 #
 # In AXLoRaTNC console:
 #

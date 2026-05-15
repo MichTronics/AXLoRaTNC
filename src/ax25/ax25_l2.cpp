@@ -24,6 +24,7 @@ void LinkLayer::begin(const L2Config& config, TxCallback tx, DataCallback data, 
 
 void LinkLayer::loop() {
   if (t1_.expired()) {
+    ++stats_.t1Expired;
     if (config_.n2 != 0 && retryCount_ >= config_.n2) {
       LOG_PROTO("AX25 T1 N2=%u exceeded state=%s → Disconnected", config_.n2, stateName(state_));
       clearWindow();
@@ -311,6 +312,7 @@ uint8_t LinkLayer::outstandingCount() const {
 void LinkLayer::retransmitWindow() {
   for (const WindowSlot& slot : window_) {
     if (slot.active) {
+      ++stats_.retx;
       transmit(slot.frame, false);
     }
   }
@@ -319,6 +321,7 @@ void LinkLayer::retransmitWindow() {
 bool LinkLayer::retransmitOne(uint8_t nsValue) {
   for (const WindowSlot& slot : window_) {
     if (slot.active && ns(slot.frame.control) == nsValue) {
+      ++stats_.retx;
       return transmit(slot.frame, false);
     }
   }
@@ -400,6 +403,8 @@ bool LinkLayer::sendSupervisoryFrame(SFrameType type, uint8_t nrValue, bool pf, 
   frame.source = config_.local;
   frame.command = command;
   frame.control = makeS(type, nrValue, pf);
+  if (type == SFrameType::RR) ++stats_.rrTx;
+  if (type == SFrameType::REJ) ++stats_.rejTx;
   return transmit(frame, false);
 }
 
@@ -482,7 +487,6 @@ void LinkLayer::handleI(const Frame& frame) {
     }
   } else {
     LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending REJ", ns(frame.control), vr_);
-    ++stats_.rejTx;
     if (frame.command && ((frame.control & 0x10) != 0)) {
       sendSupervisoryFinal(SFrameType::REJ, vr_);
     } else {
@@ -529,6 +533,7 @@ void LinkLayer::handleS(const Frame& frame) {
   }
   switch (sType(frame.control)) {
     case SFrameType::RR:
+      ++stats_.rrRx;
       if (peerBusy_) {
         peerBusy_ = false;
         t4_.stop();
@@ -565,6 +570,7 @@ void LinkLayer::handleS(const Frame& frame) {
       }
       break;
     case SFrameType::REJ:
+      ++stats_.rejRx;
       peerBusy_ = false;
       if (state_ == LinkState::Recovery) {
         setState(LinkState::Connected);
@@ -831,7 +837,7 @@ bool LinkLayer::addressedToLocal(const Frame& frame) const {
 }
 
 void LinkLayer::printStats() const {
-  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu queued=%lu q_depth=%u q_drops=%lu retries=%lu rej_tx=%lu srej_tx=%lu srej_rx=%lu fcs_drops=%lu\n",
+  Serial.printf("ax25 state=%s ui_tx=%lu ui_rx=%lu i_tx=%lu i_rx=%lu queued=%lu q_depth=%u q_drops=%lu retries=%lu t1_expired=%lu retx=%lu rr_rx=%lu rr_tx=%lu rej_rx=%lu rej_tx=%lu srej_tx=%lu srej_rx=%lu fcs_drops=%lu\n",
                 stateName(state_),
                 static_cast<unsigned long>(stats_.uiTx),
                 static_cast<unsigned long>(stats_.uiRx),
@@ -841,6 +847,11 @@ void LinkLayer::printStats() const {
                 static_cast<unsigned>(txQueue_.size()),
                 static_cast<unsigned long>(stats_.queueDrops),
                 static_cast<unsigned long>(stats_.retries),
+                static_cast<unsigned long>(stats_.t1Expired),
+                static_cast<unsigned long>(stats_.retx),
+                static_cast<unsigned long>(stats_.rrRx),
+                static_cast<unsigned long>(stats_.rrTx),
+                static_cast<unsigned long>(stats_.rejRx),
                 static_cast<unsigned long>(stats_.rejTx),
                 static_cast<unsigned long>(stats_.srejTx),
                 static_cast<unsigned long>(stats_.srejRx),

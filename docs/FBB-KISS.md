@@ -60,17 +60,17 @@ Notes:
 Attach the TNC:
 
 ```sh
-sudo kissattach /dev/serial/by-id/YOUR_AXLORATNC axlora
-sudo kissparms -p axlora -c 1 -t 0 -s 10 -r 255
+sudo kissattach /dev/ttyACM0 axlora
+sudo kissparms -p axlora -c 1 -f n -t 0 -s 10 -r 255
 ```
 
-Use `/dev/serial/by-id/...` instead of `/dev/ttyUSB0` when possible so the port
-name survives reboots.
+Use `/dev/serial/by-id/...` instead of `/dev/ttyACM0` if you want the port name
+to survive reboots.
 
 For more robust long-range LoRa settings, use a slower host profile:
 
 ```sh
-sudo kissparms -p axlora -c 1 -t 20 -s 10 -r 192
+sudo kissparms -p axlora -c 1 -f n -t 20 -s 10 -r 192
 ```
 
 ## LinFBB port.sys

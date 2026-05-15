@@ -10,6 +10,16 @@
 #include "util/log.h"
 #include "util/timer.h"
 
+#ifndef AXLORATNC_TRACE_LINFBB
+#define AXLORATNC_TRACE_LINFBB 0
+#endif
+
+#if AXLORATNC_TRACE_LINFBB
+#define LINFBB_TRACE(...) LOG_INFO(__VA_ARGS__)
+#else
+#define LINFBB_TRACE(...) do {} while (0)
+#endif
+
 namespace axlora::tnc {
 namespace {
 
@@ -48,6 +58,31 @@ static void copySanitizedNodeText(char* dst, size_t dstCap, const char* src) {
     }
   }
   dst[pos] = '\0';
+}
+
+static bool serialWriteAll(const uint8_t* data, size_t len, uint32_t timeoutMs = 2000) {
+  if (data == nullptr) return false;
+  size_t pos = 0;
+  uint32_t lastProgressMs = millis();
+  while (pos < len) {
+    const int writable = Serial.availableForWrite();
+    if (writable > 0) {
+      const size_t chunk = (len - pos) < static_cast<size_t>(writable)
+          ? (len - pos)
+          : static_cast<size_t>(writable);
+      const size_t written = Serial.write(data + pos, chunk);
+      if (written > 0) {
+        pos += written;
+        lastProgressMs = millis();
+        continue;
+      }
+    }
+    if (static_cast<uint32_t>(millis() - lastProgressMs) > timeoutMs) {
+      return false;
+    }
+    delay(1);
+  }
+  return true;
 }
 
 bool isUiFrame(const ax25::Frame& frame) {
@@ -153,6 +188,17 @@ void Tnc::begin(const char* callsign) {
   loadSettings();
   applySerialBaud();
   mailbox_.begin();
+  if (!rawTxQueue_.begin(RAW_TX_QUEUE_CAPACITY, RAW_TX_QUEUE_FALLBACK_CAPACITY)) {
+    LOG_WARN("radio tx queue allocation failed");
+  } else if (rawTxQueue_.capacity() < RAW_TX_QUEUE_CAPACITY) {
+    LOG_WARN("radio tx queue fallback capacity=%u", static_cast<unsigned>(rawTxQueue_.capacity()));
+  }
+  if (!rawTxPriorityQueue_.begin(RAW_TX_PRIORITY_QUEUE_CAPACITY, RAW_TX_PRIORITY_QUEUE_FALLBACK_CAPACITY)) {
+    LOG_WARN("radio priority tx queue allocation failed");
+  } else if (rawTxPriorityQueue_.capacity() < RAW_TX_PRIORITY_QUEUE_CAPACITY) {
+    LOG_WARN("radio priority tx queue fallback capacity=%u",
+             static_cast<unsigned>(rawTxPriorityQueue_.capacity()));
+  }
   // Prefer NVS callsign over compile-time default
   const char* cs = (savedCallsign_[0] != '\0') ? savedCallsign_ : callsign;
   if (!ax25::parseAddress(cs, local_)) {
@@ -259,14 +305,48 @@ bool Tnc::enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs, uint8_
   tx.len = len;
   tx.notBeforeMs = axlora::util::nowMs() + delayMs;
   tx.chIdx = chIdx;
+  tx.id = rawTxNextId_++;
+  tx.priority = rawFramePriority(data, len);
 
-  if (!rawTxQueue_.push(tx)) {
+  RawTxQueue& queue = tx.priority ? rawTxPriorityQueue_ : rawTxQueue_;
+  if (!queue.push(tx)) {
     ++rawTxQueueDrops_;
-    LOG_WARN("radio tx queue full");
+    LOG_WARN("radio tx %squeue full", tx.priority ? "priority " : "");
+    LINFBB_TRACE("TXQ_DROP id=%lu len=%u prio=%u q=%u/%u pq=%u/%u",
+                 static_cast<unsigned long>(tx.id), static_cast<unsigned>(tx.len),
+                 tx.priority ? 1U : 0U,
+                 static_cast<unsigned>(rawTxQueue_.size()),
+                 static_cast<unsigned>(rawTxQueue_.capacity()),
+                 static_cast<unsigned>(rawTxPriorityQueue_.size()),
+                 static_cast<unsigned>(rawTxPriorityQueue_.capacity()));
     return false;
   }
   ++rawTxQueued_;
+  const uint32_t depth = static_cast<uint32_t>(rawTxQueue_.size() + rawTxPriorityQueue_.size());
+  if (depth > rawTxHighWater_) rawTxHighWater_ = depth;
+  LINFBB_TRACE("TXQ_ENQ id=%lu len=%u prio=%u q=%u/%u pq=%u/%u",
+               static_cast<unsigned long>(tx.id), static_cast<unsigned>(tx.len),
+               tx.priority ? 1U : 0U,
+               static_cast<unsigned>(rawTxQueue_.size()),
+               static_cast<unsigned>(rawTxQueue_.capacity()),
+               static_cast<unsigned>(rawTxPriorityQueue_.size()),
+               static_cast<unsigned>(rawTxPriorityQueue_.capacity()));
   return true;
+}
+
+bool Tnc::rawFramePriority(const uint8_t* data, size_t len) const {
+  ax25::Frame frame{};
+  if (!ax25::decodeFrame(data, len, frame, true)) {
+    return false;
+  }
+  const ax25::FrameKind kind = ax25::kind(frame.control);
+  if (kind == ax25::FrameKind::S) {
+    return true;
+  }
+  if (kind == ax25::FrameKind::U && ax25::uType(frame.control) != ax25::UFrameType::UI) {
+    return true;
+  }
+  return false;
 }
 
 void Tnc::serviceRawTx(bool radioReady) {
@@ -275,7 +355,11 @@ void Tnc::serviceRawTx(bool radioReady) {
   if (static_cast<int32_t>(now - nextRawTxAttemptMs_) < 0) return;
 
   PendingRawTx tx{};
-  if (!rawTxQueue_.peek(tx)) return;
+  RawTxQueue* queue = &rawTxPriorityQueue_;
+  if (!queue->peek(tx)) {
+    queue = &rawTxQueue_;
+    if (!queue->peek(tx)) return;
+  }
   if (static_cast<int32_t>(now - tx.notBeforeMs) < 0) {
     nextRawTxAttemptMs_ = tx.notBeforeMs;
     return;
@@ -291,10 +375,19 @@ void Tnc::serviceRawTx(bool radioReady) {
     }
   }
 
+  ++radioTxStarted_;
+  LINFBB_TRACE("LORA_TX_START id=%lu len=%u prio=%u q=%u/%u pq=%u/%u",
+               static_cast<unsigned long>(tx.id), static_cast<unsigned>(tx.len),
+               tx.priority ? 1U : 0U,
+               static_cast<unsigned>(rawTxQueue_.size()),
+               static_cast<unsigned>(rawTxQueue_.capacity()),
+               static_cast<unsigned>(rawTxPriorityQueue_.size()),
+               static_cast<unsigned>(rawTxPriorityQueue_.capacity()));
   const radio::Result result = radio::driver().send(tx.data, tx.len);
   if (result == radio::Result::Ok) {
-    rawTxQueue_.pop(tx);
+    queue->pop(tx);
     ++rawTx_;
+    ++radioTxDone_;
     // Echo transmitted frames as KISS only on the console port. In WA8DED hostmode
     // the same serial stream belongs to the host protocol and raw KISS bytes would
     // force clients such as LinFBB to resync before seeing pending events.
@@ -306,6 +399,8 @@ void Tnc::serviceRawTx(bool radioReady) {
       channels_[tx.chIdx].link.notifyTxSent();
     }
     nextRawTxAttemptMs_ = axlora::util::nowMs();
+    LINFBB_TRACE("LORA_TX_DONE id=%lu raw_tx=%lu", static_cast<unsigned long>(tx.id),
+                 static_cast<unsigned long>(rawTx_));
     return;
   }
   if (result == radio::Result::Busy) {
@@ -314,7 +409,7 @@ void Tnc::serviceRawTx(bool radioReady) {
     return;
   }
   LOG_WARN("radio tx failed: %s", radio::resultName(result));
-  rawTxQueue_.pop(tx);
+  queue->pop(tx);
   ++rawTxQueueDrops_;
 }
 
@@ -388,7 +483,9 @@ void Tnc::serviceRadio() {
   lastRssi_ = rx.rssi;
   lastSnr_  = rx.snr;
   ++rawRx_;
+  ++radioRxFrames_;
   if (rx.len < 2 || !ax25::checkFcs(rx.data, rx.len)) {
+    ++radioCrcFail_;
     if (rx.len > 0) {
       LOG_RADIO("rx FCS error len=%u rssi=%.0f snr=%.0f",
                 static_cast<unsigned>(rx.len),
@@ -399,12 +496,29 @@ void Tnc::serviceRadio() {
   {  // FCS OK
     LOG_RADIO("rx ok len=%u rssi=%.0f snr=%.0f", static_cast<unsigned>(rx.len),
               static_cast<double>(rx.rssi), static_cast<double>(rx.snr));
+    ax25::Frame frame{};
+    const bool decoded = ax25::decodeFrame(rx.data, rx.len, frame, true);
+    if (decoded) {
+      const ax25::FrameKind rkind = ax25::kind(frame.control);
+      if (rkind == ax25::FrameKind::I) ++ax25IFramesOut_;
+      if (rkind == ax25::FrameKind::S && ax25::sType(frame.control) == ax25::SFrameType::RR) ++ax25RrRx_;
+      if (rkind == ax25::FrameKind::S && ax25::sType(frame.control) == ax25::SFrameType::REJ) ++ax25RejRx_;
+      char src[12]{}, dst[12]{};
+      ax25::formatAddress(frame.source, src, sizeof(src));
+      ax25::formatAddress(frame.destination, dst, sizeof(dst));
+      LINFBB_TRACE("RADIO_AX25_RX %s>%s kind=%u ns=%u nr=%u pf=%u pid=%02X info=%u",
+                   src, dst, static_cast<unsigned>(rkind),
+                   rkind == ax25::FrameKind::I ? ax25::ns(frame.control) : 0,
+                   rkind == ax25::FrameKind::I || rkind == ax25::FrameKind::S ? ax25::nr(frame.control) : 0,
+                   (frame.control & 0x10) ? 1U : 0U,
+                   static_cast<unsigned>(frame.pid),
+                   static_cast<unsigned>(frame.infoLen));
+    }
     if (serialMode_ == SerialMode::Console || serialMode_ == SerialMode::Kiss) {
       emitKissData(rx.data, rx.len - 2);
     }
     if (serialMode_ == SerialMode::Kiss) return;
-    ax25::Frame frame{};
-    if (ax25::decodeFrame(rx.data, rx.len, frame, true)) {
+    if (decoded) {
       // Detect APRS (UI, PID=0xF0) and log parsed content
       if (ax25::kind(frame.control) == ax25::FrameKind::U &&
           ax25::uType(frame.control) == ax25::UFrameType::UI &&
@@ -513,19 +627,32 @@ void Tnc::serviceNetrom(bool radioReady) {
 // ---------------------------------------------------------------------------
 
 void Tnc::serviceSerial() {
-  while (Serial.available() > 0) {
+  constexpr size_t  SERIAL_BYTE_BUDGET = 768;
+  constexpr uint8_t KISS_FRAME_BUDGET  = 4;
+  size_t bytesProcessed = 0;
+  uint8_t kissFramesProcessed = 0;
+
+  while (Serial.available() > 0 && bytesProcessed < SERIAL_BYTE_BUDGET) {
+    if (serialMode_ == SerialMode::Kiss &&
+        rawTxQueue_.free() <= KISS_SERIAL_TXQ_HEADROOM &&
+        rawTxPriorityQueue_.free() == 0) {
+      break;
+    }
     const uint8_t b = static_cast<uint8_t>(Serial.read());
+    ++bytesProcessed;
     if (serialMode_ == SerialMode::Wa8ded) {
       serviceWa8ded(b);
       handleQuietEscape(b);
       continue;
     }
     ax25::KissFrame frame{};
-    if (b == ax25::KISS_FEND) kissActive_ = true;
+    if (serialMode_ == SerialMode::Kiss || b == ax25::KISS_FEND) kissActive_ = true;
     if (kissActive_) {
       if (kiss_.feed(b, frame)) {
         handleKiss(frame);
-        kissActive_ = false;
+        if (++kissFramesProcessed >= KISS_FRAME_BUDGET) {
+          break;
+        }
       }
       continue;
     }
@@ -558,11 +685,69 @@ void Tnc::serviceSerial() {
 }
 
 void Tnc::handleKiss(const ax25::KissFrame& frame) {
+  ++kissInFrames_;
+  kissInBytes_ += static_cast<uint32_t>(frame.len + 1);
+  LINFBB_TRACE("KISS_IN n=%lu port=%u cmd=%u len=%u first=%02X %02X %02X %02X",
+               static_cast<unsigned long>(kissInFrames_),
+               static_cast<unsigned>(frame.port),
+               static_cast<unsigned>(frame.command),
+               static_cast<unsigned>(frame.len),
+               frame.len > 0 ? frame.data[0] : 0,
+               frame.len > 1 ? frame.data[1] : 0,
+               frame.len > 2 ? frame.data[2] : 0,
+               frame.len > 3 ? frame.data[3] : 0);
   if (frame.command == ax25::KissCommand::Data) {
+    ax25::Frame parsed{};
+    if (ax25::decodeFrame(frame.data, frame.len, parsed, false)) {
+      const ax25::FrameKind kind = ax25::kind(parsed.control);
+      if (kind == ax25::FrameKind::I) ++ax25IFramesIn_;
+      if (kind == ax25::FrameKind::U && ax25::uType(parsed.control) == ax25::UFrameType::UI) ++ax25UiFrames_;
+      if (kind == ax25::FrameKind::S && ax25::sType(parsed.control) == ax25::SFrameType::RR) ++ax25RrTx_;
+      if (kind == ax25::FrameKind::S && ax25::sType(parsed.control) == ax25::SFrameType::REJ) ++ax25RejTx_;
+      char src[12]{}, dst[12]{};
+      ax25::formatAddress(parsed.source, src, sizeof(src));
+      ax25::formatAddress(parsed.destination, dst, sizeof(dst));
+      LINFBB_TRACE("KISS_AX25_IN %s>%s kind=%u ns=%u nr=%u pf=%u pid=%02X info=%u",
+                   src, dst, static_cast<unsigned>(kind),
+                   kind == ax25::FrameKind::I ? ax25::ns(parsed.control) : 0,
+                   kind == ax25::FrameKind::I || kind == ax25::FrameKind::S ? ax25::nr(parsed.control) : 0,
+                   (parsed.control & 0x10) ? 1U : 0U,
+                   static_cast<unsigned>(parsed.pid),
+                   static_cast<unsigned>(parsed.infoLen));
+      // Drop I-frame retransmits already pending in the TX queue.
+      // LinFBB's T1 fires before LoRa round-trip completes; without dedup the
+      // queue accumulates N2 copies of the same NS, each costing one full LoRa
+      // airtime, so later I-frames arrive at the host only after duplicates
+      // drain — causing the beginning of multi-frame responses to be "lost".
+      if (kind == ax25::FrameKind::I) {
+        const uint8_t txNs = ax25::ns(parsed.control);
+        for (size_t qi = 0; qi < rawTxQueue_.size(); ++qi) {
+          PendingRawTx queued{};
+          if (!rawTxQueue_.peek(qi, queued)) break;
+          ax25::Frame qf{};
+          if (!ax25::decodeFrame(queued.data, queued.len, qf, true)) continue;
+          if (ax25::kind(qf.control) != ax25::FrameKind::I) continue;
+          if (ax25::ns(qf.control) == txNs &&
+              ax25::addressEquals(qf.source, parsed.source) &&
+              ax25::addressEquals(qf.destination, parsed.destination)) {
+            ++kissIFrameDuplicates_;
+            LINFBB_TRACE("KISS_IDUP_DROP ns=%u src=%s dst=%s q=%u",
+                         static_cast<unsigned>(txNs), src, dst,
+                         static_cast<unsigned>(rawTxQueue_.size()));
+            return;
+          }
+        }
+      }
+    } else {
+      ++kissDecodeErrors_;
+      LINFBB_TRACE("KISS_AX25_IN_DECODE_FAIL len=%u", static_cast<unsigned>(frame.len));
+    }
     uint8_t withFcs[MAX_PACKET_BYTES]{};
     size_t len = 0;
     if (ax25::appendFcs(frame.data, frame.len, withFcs, sizeof(withFcs), len)) {
       transmitRaw(withFcs, len);
+    } else {
+      ++kissDecodeErrors_;
     }
     return;
   }
@@ -584,7 +769,19 @@ void Tnc::emitKissData(const uint8_t* frameNoFcs, size_t len) {
   uint8_t encoded[(MAX_PACKET_BYTES * 2) + 4]{};
   size_t encodedLen = 0;
   if (ax25::encodeKiss(kissFrame, encoded, sizeof(encoded), encodedLen)) {
-    Serial.write(encoded, encodedLen);
+    const uint32_t startMs = axlora::util::nowMs();
+    if (!serialWriteAll(encoded, encodedLen)) {
+      ++kissOutPartialWrites_;
+      LOG_WARN("serial KISS write timeout len=%u", static_cast<unsigned>(encodedLen));
+    }
+    const uint32_t elapsedMs = axlora::util::nowMs() - startMs;
+    if (elapsedMs > kissOutBlockMsMax_) kissOutBlockMsMax_ = elapsedMs;
+    ++kissOutFrames_;
+    LINFBB_TRACE("KISS_OUT n=%lu len=%u block_ms=%lu partial=%lu",
+                 static_cast<unsigned long>(kissOutFrames_),
+                 static_cast<unsigned>(encodedLen),
+                 static_cast<unsigned long>(elapsedMs),
+                 static_cast<unsigned long>(kissOutPartialWrites_));
   }
 }
 
@@ -1091,13 +1288,48 @@ void Tnc::printInfo() const {
 
 void Tnc::printStats() const {
   const radio::Stats& rs = radio::stats();
-  Serial.printf("tnc raw_tx=%lu raw_rx=%lu txq=%u queued=%lu deferred=%lu qdrops=%lu kiss_txdelay=%u p=%u slot=%u fulldup=%u\n",
+  Serial.printf("tnc raw_tx=%lu raw_rx=%lu txq=%u/%u ptxq=%u/%u highwater=%lu queued=%lu deferred=%lu qdrops=%lu kiss_txdelay=%u p=%u slot=%u fulldup=%u\n",
                 static_cast<unsigned long>(rawTx_), static_cast<unsigned long>(rawRx_),
                 static_cast<unsigned>(rawTxQueue_.size()),
+                static_cast<unsigned>(rawTxQueue_.capacity()),
+                static_cast<unsigned>(rawTxPriorityQueue_.size()),
+                static_cast<unsigned>(rawTxPriorityQueue_.capacity()),
+                static_cast<unsigned long>(rawTxHighWater_),
                 static_cast<unsigned long>(rawTxQueued_),
                 static_cast<unsigned long>(rawTxDeferred_),
                 static_cast<unsigned long>(rawTxQueueDrops_),
                 kissParams_.txDelay, kissParams_.persistence, kissParams_.slotTime, kissParams_.fullDuplex);
+  uint32_t ax25Retx = 0;
+  uint32_t ax25T1Expired = 0;
+  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) {
+    const ax25::L2Stats& s = channels_[i].link.stats();
+    ax25Retx += s.retx;
+    ax25T1Expired += s.t1Expired;
+  }
+  Serial.printf("linfbb kiss_in_frames=%lu kiss_in_bytes=%lu kiss_decode_errors=%lu kiss_iframe_dupes=%lu ax25_iframes_in=%lu ax25_iframes_out=%lu ax25_ui_frames=%lu ax25_rr_rx=%lu ax25_rr_tx=%lu ax25_rej_rx=%lu ax25_rej_tx=%lu ax25_retx=%lu ax25_t1_expired=%lu\n",
+                static_cast<unsigned long>(kissInFrames_),
+                static_cast<unsigned long>(kissInBytes_),
+                static_cast<unsigned long>(kissDecodeErrors_),
+                static_cast<unsigned long>(kissIFrameDuplicates_),
+                static_cast<unsigned long>(ax25IFramesIn_),
+                static_cast<unsigned long>(ax25IFramesOut_),
+                static_cast<unsigned long>(ax25UiFrames_),
+                static_cast<unsigned long>(ax25RrRx_),
+                static_cast<unsigned long>(ax25RrTx_),
+                static_cast<unsigned long>(ax25RejRx_),
+                static_cast<unsigned long>(ax25RejTx_),
+                static_cast<unsigned long>(ax25Retx),
+                static_cast<unsigned long>(ax25T1Expired));
+  Serial.printf("linfbb radio_tx_started=%lu radio_tx_done=%lu radio_rx_frames=%lu radio_crc_fail=%lu txq_highwater=%lu qdrops=%lu kiss_out_frames=%lu kiss_out_partial_writes=%lu kiss_out_block_ms_max=%lu\n",
+                static_cast<unsigned long>(radioTxStarted_),
+                static_cast<unsigned long>(radioTxDone_),
+                static_cast<unsigned long>(radioRxFrames_),
+                static_cast<unsigned long>(radioCrcFail_),
+                static_cast<unsigned long>(rawTxHighWater_),
+                static_cast<unsigned long>(rawTxQueueDrops_),
+                static_cast<unsigned long>(kissOutFrames_),
+                static_cast<unsigned long>(kissOutPartialWrites_),
+                static_cast<unsigned long>(kissOutBlockMsMax_));
   Serial.printf("digi enabled=%u mode=%s tx=%lu ui_tx=%lu conn_tx=%lu dupes=%lu drops=%lu\n",
                 digi_.enabled, digi_.allFrames ? "all" : "ui",
                 static_cast<unsigned long>(digiTx_),
@@ -1783,10 +2015,10 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     dedEcho_ = true;
     dedTimestamp_ = false;
     dedDamaTimeout_ = 120;
-    dedFrack_ = 250;
+    dedFrack_ = 1500;
     dedHeardMode_ = 0;
-    dedRetryLimit_ = 10;
-    dedMaxFrame_ = 2;
+    dedRetryLimit_ = 5;
+    dedMaxFrame_ = 1;
     kissParams_.persistence = 32;
     kissParams_.txDelay = 25;
     kissParams_.slotTime = 10;
@@ -1797,7 +2029,7 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     dedXonXoff_ = true;
     dedCtextMode_ = 0;
     dedUnattended_ = false;
-    dedT2_ = 150;
+    dedT2_ = 100;
     dedT3_ = 18000;
     dedIPollFrameLength_ = 60;
     strncpy(dedMonitorMode_, "IU", sizeof(dedMonitorMode_) - 1);
@@ -2165,6 +2397,9 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
   for (size_t i = 0; i < copyLen; ++i) {
     if (cmd[i] >= 'a' && cmd[i] <= 'z') cmd[i] = static_cast<char>(cmd[i] - 32);
   }
+  size_t cmdLen = strlen(cmd);
+  while (cmdLen > 0 && (cmd[cmdLen - 1] == '\r' || cmd[cmdLen - 1] == '\n'))
+    cmd[--cmdLen] = '\0';
 
   if (cmd[0] == 'G') {
     // G / G0 / G1 polling; honour XON/XOFF pause for monitor/data events
@@ -3202,12 +3437,8 @@ void Tnc::applyRadioConfig() {
             radioConfig_.powerDbm);
 }
 
-void Tnc::saveSerialMode(SerialMode mode) {
-  Preferences prefs;
-  if (prefs.begin("axloratnc", false)) {
-    prefs.putUChar("mode", static_cast<uint8_t>(mode));
-    prefs.end();
-  }
+void Tnc::saveSerialMode(SerialMode /*mode*/) {
+  // Mode is intentionally not persisted — always starts in Console after reset.
 }
 
 void Tnc::setSerialMode(SerialMode mode) {

@@ -33,6 +33,11 @@ struct L2Stats {
   uint32_t iRx = 0;
   uint32_t iTx = 0;
   uint32_t retries = 0;
+  uint32_t t1Expired = 0;
+  uint32_t retx = 0;
+  uint32_t rrRx = 0;
+  uint32_t rrTx = 0;
+  uint32_t rejRx = 0;
   uint32_t rejTx = 0;
   uint32_t srejTx = 0;
   uint32_t srejRx = 0;

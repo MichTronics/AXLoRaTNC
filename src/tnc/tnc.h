@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "ax25/ax25_addr.h"
 #include "ax25/ax25_frame.h"
 #include "ax25/ax25_kiss.h"
@@ -16,7 +17,7 @@ namespace axlora::tnc {
 static constexpr uint8_t CHANNEL_COUNT = 8;
 
 struct KissParams {
-  uint8_t txDelay    = 100;   // 1000 ms — LoRa RX-to-TX switching guard
+  uint8_t txDelay    = 0;     // 0 ms — LoRa has no RF warm-up requirement
   uint8_t persistence = 255;  // transmit immediately (LoRa: no collision risk on single freq)
   uint8_t slotTime   = 20;    // 200 ms slot
   uint8_t fullDuplex = 0;
@@ -134,6 +135,71 @@ class Tnc {
     size_t   len         = 0;
     uint32_t notBeforeMs = 0;
     uint8_t  chIdx       = 0xFF;  // 0xFF = not a link-layer frame
+    uint32_t id          = 0;
+    bool     priority    = false;
+  };
+
+  static constexpr size_t RAW_TX_QUEUE_CAPACITY = 160;
+  static constexpr size_t RAW_TX_QUEUE_FALLBACK_CAPACITY = 64;
+  static constexpr size_t RAW_TX_PRIORITY_QUEUE_CAPACITY = 32;
+  static constexpr size_t RAW_TX_PRIORITY_QUEUE_FALLBACK_CAPACITY = 16;
+  static constexpr size_t KISS_SERIAL_TXQ_HEADROOM = 4;
+
+  class RawTxQueue {
+   public:
+    bool begin(size_t desiredCapacity, size_t fallbackCapacity) {
+      if (items_ != nullptr) return true;
+      capacity_ = desiredCapacity;
+      items_ = static_cast<PendingRawTx*>(malloc(sizeof(PendingRawTx) * capacity_));
+      if (items_ == nullptr && fallbackCapacity > 0 && fallbackCapacity < desiredCapacity) {
+        capacity_ = fallbackCapacity;
+        items_ = static_cast<PendingRawTx*>(malloc(sizeof(PendingRawTx) * capacity_));
+      }
+      clear();
+      return items_ != nullptr;
+    }
+
+    bool push(const PendingRawTx& item) {
+      if (items_ == nullptr || full()) return false;
+      items_[head_] = item;
+      head_ = (head_ + 1) % capacity_;
+      ++count_;
+      return true;
+    }
+
+    bool pop(PendingRawTx& out) {
+      if (items_ == nullptr || empty()) return false;
+      out = items_[tail_];
+      tail_ = (tail_ + 1) % capacity_;
+      --count_;
+      return true;
+    }
+
+    bool peek(PendingRawTx& out) const {
+      if (items_ == nullptr || empty()) return false;
+      out = items_[tail_];
+      return true;
+    }
+
+    bool peek(size_t i, PendingRawTx& out) const {
+      if (items_ == nullptr || i >= count_) return false;
+      out = items_[(tail_ + i) % capacity_];
+      return true;
+    }
+
+    bool empty() const { return count_ == 0; }
+    bool full() const { return items_ == nullptr || count_ == capacity_; }
+    size_t size() const { return count_; }
+    size_t free() const { return capacity_ > count_ ? capacity_ - count_ : 0; }
+    size_t capacity() const { return capacity_; }
+    void clear() { head_ = 0; tail_ = 0; count_ = 0; }
+
+   private:
+    PendingRawTx* items_ = nullptr;
+    size_t capacity_ = 0;
+    size_t head_ = 0;
+    size_t tail_ = 0;
+    size_t count_ = 0;
   };
 
   // Static LinkLayer callbacks
@@ -143,6 +209,7 @@ class Tnc {
   // Radio helpers
   bool transmitRaw(const uint8_t* data, size_t len, uint8_t chIdx = 0xFF);
   bool enqueueRawTx(const uint8_t* data, size_t len, uint32_t delayMs, uint8_t chIdx = 0xFF);
+  bool rawFramePriority(const uint8_t* data, size_t len) const;
   void serviceRawTx(bool radioReady);
   void serviceRadio();
   int  findChannelForIncoming(const ax25::Frame& frame) const;
@@ -273,9 +340,9 @@ class Tnc {
   uint8_t dedSelectedChannel_  = 0;
   uint8_t dedMaxIncoming_      = 4;
   uint16_t dedDamaTimeout_     = 120;
-  uint16_t dedFrack_           = 800;   // T1 = 8000 ms — LoRa round-trip can exceed 4 s
+  uint16_t dedFrack_           = 1500;  // T1 = 15000 ms — LoRa RTT 4–10 s; 2× margin
   uint8_t dedHeardMode_        = 0;
-  uint8_t dedRetryLimit_       = 10;    // N2 retries
+  uint8_t dedRetryLimit_       = 5;     // N2 retries — 5 is enough for LoRa
   uint8_t dedMaxFrame_         = 1;     // window=1 — LoRa links must not pipeline
   bool    dedTxEnabled_        = true;
   uint8_t dedSrttA1_           = 7;
@@ -284,7 +351,7 @@ class Tnc {
   uint8_t dedIPollFrameLength_ = 64;    // PACLEN for LoRa
   bool    dedEightBitTerminal_ = true;
   bool    dedValidateCallsign_ = true;
-  uint16_t dedT2_              = 30;    // T2 = 300 ms — ACK within one LoRa slot
+  uint16_t dedT2_              = 100;   // T2 = 1000 ms — delay before unsolicited RR; reduces LoRa channel load
   uint16_t dedT3_              = 18000;
   ax25::Address dedUnprotoDestination_{};
   char    dedMonitorMode_[20]  = "IU";
@@ -310,8 +377,29 @@ class Tnc {
   uint32_t rawTxQueued_     = 0;
   uint32_t rawTxDeferred_   = 0;
   uint32_t rawTxQueueDrops_ = 0;
+  uint32_t rawTxNextId_     = 1;
+  uint32_t rawTxHighWater_  = 0;
   uint32_t nextRawTxAttemptMs_ = 0;
-  axlora::util::RingBuffer<PendingRawTx, 64> rawTxQueue_;
+  RawTxQueue rawTxQueue_;
+  RawTxQueue rawTxPriorityQueue_;
+  uint32_t kissInFrames_ = 0;
+  uint32_t kissInBytes_ = 0;
+  uint32_t kissDecodeErrors_ = 0;
+  uint32_t kissIFrameDuplicates_ = 0;
+  uint32_t ax25IFramesIn_ = 0;
+  uint32_t ax25IFramesOut_ = 0;
+  uint32_t ax25UiFrames_ = 0;
+  uint32_t ax25RrRx_ = 0;
+  uint32_t ax25RrTx_ = 0;
+  uint32_t ax25RejRx_ = 0;
+  uint32_t ax25RejTx_ = 0;
+  uint32_t radioTxStarted_ = 0;
+  uint32_t radioTxDone_ = 0;
+  uint32_t radioRxFrames_ = 0;
+  uint32_t radioCrcFail_ = 0;
+  uint32_t kissOutFrames_ = 0;
+  uint32_t kissOutPartialWrites_ = 0;
+  uint32_t kissOutBlockMsMax_ = 0;
   uint32_t beaconTx_        = 0;
   uint32_t beaconDrops_     = 0;
   uint32_t netromBroadcasts_  = 0;
