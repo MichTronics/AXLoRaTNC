@@ -1,6 +1,6 @@
 {
   "name": "AXLoRaTNC \u2013 Heltec WiFi LoRa 32 V3",
-  "version": "dev-fca9f7a",
+  "version": "dev-3b5b832",
   "new_install_prompt_erase": true,
   "builds": [
     {
