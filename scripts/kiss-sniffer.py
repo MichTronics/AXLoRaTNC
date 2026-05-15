@@ -193,13 +193,31 @@ class KISSParser:
             print(f"[{ts}]  {self.label:>10}  port={port}{port_warn}  {type_name}  {val}", flush=True)
 
 
+class _Tee:
+    """Write to multiple streams at once (stdout + log file)."""
+    def __init__(self, *streams):
+        self._streams = streams
+    def write(self, data):
+        for s in self._streams:
+            s.write(data)
+    def flush(self):
+        for s in self._streams:
+            s.flush()
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description="AXLoRaTNC KISS proxy sniffer")
     ap.add_argument("dev",  nargs="?", default="/dev/ttyACM0", help="Serial device")
     ap.add_argument("baud", nargs="?", type=int, default=115200, help="Baud rate")
     ap.add_argument("-v", "--verbose", action="store_true", help="Hex dump I-frame payloads")
+    ap.add_argument("-o", "--output",  metavar="FILE",      help="Also write log to FILE")
     args = ap.parse_args()
+
+    log_fh = None
+    if args.output:
+        log_fh = open(args.output, "w", buffering=1, encoding="utf-8")
+        sys.stdout = _Tee(sys.__stdout__, log_fh)
 
     dev = args.dev
     baud = args.baud
@@ -216,6 +234,8 @@ def main():
     print(f"  TNC serial : {dev}  @ {baud}")
     print(f"  PTY        : {pty_name}")
     print(f"  Verbose    : {'yes (hex dump)' if args.verbose else 'no (-v for hex)'}")
+    if log_fh:
+        print(f"  Log file   : {args.output}")
     print()
     print(f"  Run kissattach on the PTY above, e.g.:")
     print(f"    sudo kissattach {pty_name} axlora")
@@ -260,6 +280,8 @@ def main():
             os.close(slave_fd)
         except OSError:
             pass
+        if log_fh:
+            log_fh.close()
 
 
 if __name__ == "__main__":

@@ -50,6 +50,9 @@ TNC_CODES = {
 # Host→TNC command strings that are routine polls (hidden unless -p)
 _POLL_PREFIXES = ("G", "L", "@B")
 
+# Terminal-mode JHOST1 sequence LinFBB sends before entering binary hostmode
+_JHOST1_TERM = b'\x1bJHOST1\r'
+
 CTRL_MAP = {
     0x00: "<NUL>", 0x01: "<SOH>", 0x02: "<STX>", 0x03: "<ETX>",
     0x04: "<EOT>", 0x06: "<ACK>", 0x07: "<BEL>", 0x08: "<BS>",
@@ -84,6 +87,19 @@ def _fmt(data, verbose=False):
     return f'{len(data)}b "{s}"'
 
 
+def _fmt_terminal(data):
+    """Format pre-hostmode terminal bytes with visible control characters."""
+    out = []
+    for b in data:
+        if   b == 0x1B: out.append('<ESC>')
+        elif b == 0x18: out.append('<CAN>')
+        elif b == 0x0D: out.append('<CR>')
+        elif b == 0x0A: out.append('<LF>')
+        elif 0x20 <= b < 0x7F: out.append(chr(b))
+        else: out.append(f'<{b:02X}>')
+    return '"' + ''.join(out) + '"'
+
+
 class DedParser:
     """WA8DED frame state machine.
 
@@ -95,6 +111,9 @@ class DedParser:
         code=0          → ACK, no payload (2-byte frame total)
         code=1..5       → null-terminated ASCII text, NO length byte
         code=6..7       → [len-1] + binary data
+
+    FBB→TNC starts in terminal mode (ASCII) and switches to binary WA8DED
+    framing after detecting the JHOST1 escape sequence from LinFBB.
     """
 
     _S_CH   = 0
@@ -108,6 +127,9 @@ class DedParser:
         self.verbose    = verbose
         self.show_polls = show_polls
         self._from_tnc  = label.startswith("TNC")
+        # FBB→TNC begins in terminal mode; switch to binary after JHOST1
+        self._in_terminal = not self._from_tnc
+        self._term_buf    = bytearray()
         self._reset()
 
     def _reset(self):
@@ -119,7 +141,24 @@ class DedParser:
 
     def feed(self, data):
         for b in data:
-            self._step(b)
+            if self._in_terminal:
+                self._step_terminal(b)
+            else:
+                self._step(b)
+
+    def _step_terminal(self, b):
+        """Buffer pre-hostmode bytes; switch to binary framing after JHOST1."""
+        self._term_buf.append(b)
+        n = len(_JHOST1_TERM)
+        if len(self._term_buf) >= n and bytes(self._term_buf[-n:]) == _JHOST1_TERM:
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            pre = bytes(self._term_buf[:-n])
+            if pre:
+                print(f"[{ts}]  {self.label:>7}  ch=-  TERMINAL  {_fmt_terminal(pre)}", flush=True)
+            print(f"[{ts}]  {self.label:>7}  ch=0  JHOST  \"JHOST1\"", flush=True)
+            self._in_terminal = False
+            self._term_buf.clear()
+            self._reset()
 
     def _step(self, b):
         s = self._state
@@ -252,6 +291,18 @@ def _cmd_label(cmd):
     return "CMD"
 
 
+class _Tee:
+    """Write to multiple streams at once (stdout + log file)."""
+    def __init__(self, *streams):
+        self._streams = streams
+    def write(self, data):
+        for s in self._streams:
+            s.write(data)
+    def flush(self):
+        for s in self._streams:
+            s.flush()
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description="AXLoRaTNC WA8DED hostmode proxy sniffer")
@@ -259,7 +310,13 @@ def main():
     ap.add_argument("baud", nargs="?", type=int, default=9600,  help="Baud rate")
     ap.add_argument("-v", "--verbose",    action="store_true", help="Hex dump payloads")
     ap.add_argument("-p", "--show-polls", action="store_true", help="Show G/L/@B poll frames")
+    ap.add_argument("-o", "--output",     metavar="FILE",      help="Also write log to FILE")
     args = ap.parse_args()
+
+    log_fh = None
+    if args.output:
+        log_fh = open(args.output, "w", buffering=1, encoding="utf-8")
+        sys.stdout = _Tee(sys.__stdout__, log_fh)
 
     master_fd, slave_fd = pty.openpty()
     tty.setraw(slave_fd)
@@ -271,6 +328,8 @@ def main():
     print(f"  PTY        : {pty_name}")
     print(f"  Polls      : {'visible' if args.show_polls else 'hidden  (add -p to show)'}")
     print(f"  Hex dump   : {'yes' if args.verbose else 'no  (add -v to enable)'}")
+    if log_fh:
+        print(f"  Log file   : {args.output}")
     print()
     print(f"  Point LinFBB at: {pty_name}")
     print("=" * 60)
@@ -313,6 +372,8 @@ def main():
             os.close(slave_fd)
         except OSError:
             pass
+        if log_fh:
+            log_fh.close()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,23 @@ with `kissattach`, then let LinFBB use the kernel AX.25 port through interface
 WA8DED hostmode remains available for compatibility testing, but KISS is the
 preferred route for a stable BBS link over LoRa.
 
+## Michel test assumptions
+
+For Michel's current LinFBB/LoRa lab tests, optimize first for complete and
+faster BBS text transfer. Airtime and duty-cycle economy are not the primary
+constraints during these tests.
+
+Use these assumptions when tuning AXLoRaTNC for LinFBB unless Michel explicitly
+asks for a legal/airtime-safe profile:
+
+- Packet loss during tuning is acceptable, similar to classic packet radio.
+- The priority is complete LinFBB text, fewer `TNC BUSY - LINE IGNORED`
+  responses, and higher throughput.
+- Test profiles may use more aggressive values such as larger `I`/PACLEN,
+  `P=255`, short slot/txdelay values, and duty-cycle guard off.
+- Do not start future LinFBB/LoRa tuning by reducing airtime unless that is the
+  specific goal.
+
 ## TNC setup
 
 Configure every AXLoRaTNC node with the same radio settings:

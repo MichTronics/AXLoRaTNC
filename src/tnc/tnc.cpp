@@ -1711,7 +1711,7 @@ bool Tnc::sendConnectedChunked(uint8_t chIdx, const uint8_t* data, size_t len) {
       ? static_cast<size_t>(dedIPollFrameLength_)
       : ax25::MAX_INFO_LEN;
   const size_t neededFrames = (len + paclen - 1) / paclen;
-  if (neededFrames > dedConnectedFrameCapacity(chIdx)) {
+  if (neededFrames > dedConnectedAcceptFrameCapacity(chIdx)) {
     return false;
   }
   size_t offset = 0;
@@ -1898,6 +1898,10 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     }
     dedHostMode_ = (*value != '0');
     dedHeaderPos_ = 0; dedDataPos_ = 0; dedDataLen_ = 0;
+    if (dedHostMode_) {
+      // Confirm hostmode entry with a binary ACK so LinFBB stops retrying JHOST1
+      sendDedShort(0, 0);
+    }
     return;
   }
 
@@ -2521,8 +2525,22 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
   }
 
   if (cmd[0] == 'L') {
-    const uint8_t chIdx = (channel >= 1 && channel <= CHANNEL_COUNT) ? channel - 1 : 0;
-    const bool connected = channels_[chIdx].link.state() == ax25::LinkState::Connected;
+    if (channel == 0) {
+      // Channel 0 is the UI/unconnected channel — no RF state to report.
+      sendDedText(0, 1, "0 0 0 0 0 0 -");
+      return;
+    }
+    const uint8_t chIdx = channel - 1;
+    if (chIdx >= CHANNEL_COUNT) {
+      sendDedText(channel, 1, "0 0 0 0 0 0 -");
+      return;
+    }
+    const ax25::LinkState linkState = channels_[chIdx].link.state();
+    // Recovery is transparent to the host: the link is still alive and retrying.
+    // Reporting connected=0 during Recovery would mislead LinFBB into thinking the
+    // session dropped before the retry limit has been exhausted.
+    const bool connected = (linkState == ax25::LinkState::Connected ||
+                            linkState == ax25::LinkState::Recovery);
     char peer[12]{};
     ax25::formatAddress(channels_[chIdx].link.peer(), peer, sizeof(peer));
     const size_t pending = pendingDedEvents(channel, 0);
@@ -2595,6 +2613,12 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
     dedMonitorMode_[sizeof(dedMonitorMode_) - 1] = '\0';
     monitorEnabled_ = (*arg != '0' && *arg != 'N');
     saveDedConfig();
+    sendDedShort(channel, 0);
+    return;
+  }
+
+  if (cmd[0] == 'H') {
+    // Heard-list configuration — accepted silently (no heard list on LoRa TNC)
     sendDedShort(channel, 0);
     return;
   }
@@ -2729,29 +2753,64 @@ void Tnc::sendDedCounted(uint8_t channel, uint8_t code, const uint8_t* data, siz
 }
 
 unsigned Tnc::dedFreeBufferBytes(uint8_t channel) const {
+  const unsigned frameBytes = dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : 64u;
+
   if (channel >= 1 && channel <= CHANNEL_COUNT) {
     const size_t frames = dedConnectedFrameCapacity(channel - 1);
-    return frames > 255U ? 255U : static_cast<unsigned>(frames);
+    return static_cast<unsigned>(frames) * frameBytes;
   }
 
-  size_t best = 1;  // channel 0/UI can accept one host frame at a time
+  // Channel 0 / UI: report capacity of the best available connected channel.
+  // Do not invent a non-zero value when no RF link can currently accept data.
+  size_t best = 0;
   for (uint8_t chIdx = 0; chIdx < CHANNEL_COUNT; ++chIdx) {
     const size_t frames = dedConnectedFrameCapacity(chIdx);
     if (frames > best) best = frames;
   }
-  return best > 255U ? 255U : static_cast<unsigned>(best);
+  return static_cast<unsigned>(best) * frameBytes;
 }
 
 size_t Tnc::dedConnectedFrameCapacity(uint8_t chIdx) const {
   if (chIdx >= CHANNEL_COUNT) return 0;
   const ax25::LinkLayer& link = channels_[chIdx].link;
-  if (link.state() != ax25::LinkState::Connected ||
+  const auto st = link.state();
+  const bool live = (st == ax25::LinkState::Connected ||
+                     st == ax25::LinkState::Recovery);
+  if (!live ||
       link.connectedPeerBusy() ||
       link.connectedQueueFree() == 0) {
     return 0;
   }
+  // WA8DED @B reports free host-buffer bytes.  With MAXFRAME=1 and I=60,
+  // 13 queued frames plus 1 open transmit-window slot gives the classic
+  // 14 * 60 = 840 bytes when the channel is completely free.  As LinFBB fills
+  // the buffer this value drops, and it rises again as queued/outstanding
+  // frames are transmitted and acknowledged.
+  if (link.connectedQueueSize() != 0 ||
+      link.outstandingFrameCount() != 0 ||
+      link.connectedWindowFree() == 0) {
+    return 0;
+  }
+  return link.connectedQueueFree() + link.connectedWindowFree();
+}
+
+size_t Tnc::dedConnectedAcceptFrameCapacity(uint8_t chIdx) const {
+  if (chIdx >= CHANNEL_COUNT) return 0;
+  const ax25::LinkLayer& link = channels_[chIdx].link;
+  const auto st = link.state();
+  const bool live = (st == ax25::LinkState::Connected ||
+                     st == ax25::LinkState::Recovery);
+  if (!live ||
+      link.connectedPeerBusy() ||
+      link.connectedQueueFree() == 0) {
+    return 0;
+  }
+
+  // Accept data that already fits in the host buffer previously advertised
+  // with @B.  @B may now be 0 while LoRa is still draining/ACKing, but LinFBB
+  // is allowed to continue sending the bytes covered by the earlier credit.
   size_t frames = link.connectedQueueFree();
-  if (link.connectedQueueSize() == 0) {
+  if (link.connectedQueueSize() == 0 && link.outstandingFrameCount() == 0) {
     frames += link.connectedWindowFree();
   }
   return frames;

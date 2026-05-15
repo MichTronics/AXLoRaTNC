@@ -241,6 +241,7 @@ class Tnc {
   void sendDedCounted(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   unsigned dedFreeBufferBytes(uint8_t channel) const;
   size_t dedConnectedFrameCapacity(uint8_t chIdx) const;
+  size_t dedConnectedAcceptFrameCapacity(uint8_t chIdx) const;
   bool enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   size_t pendingDedEvents(uint8_t channel, uint8_t wanted = 0);
   bool popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out);

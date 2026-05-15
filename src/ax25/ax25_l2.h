@@ -154,7 +154,7 @@ class LinkLayer {
   Timer t4_;  // RNR busy-timeout
   bool  t2PendingAck_ = false;
   uint8_t maxFrame_ = WINDOW_SIZE;
-  axlora::util::RingBuffer<QueuedInfo, 6> txQueue_;
+  axlora::util::RingBuffer<QueuedInfo, 13> txQueue_;
   L2Stats stats_{};
 };
 
