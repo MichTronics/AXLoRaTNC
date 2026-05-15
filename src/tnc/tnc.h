@@ -341,18 +341,18 @@ class Tnc {
   uint8_t dedSelectedChannel_  = 0;
   uint8_t dedMaxIncoming_      = 4;
   uint16_t dedDamaTimeout_     = 120;
-  uint16_t dedFrack_           = 1500;  // T1 = 15000 ms — LoRa RTT 4–10 s; 2× margin
+  uint16_t dedFrack_           = 3000;  // T1 = 30000 ms for lab-speed LoRa/BBS tests
   uint8_t dedHeardMode_        = 0;
-  uint8_t dedRetryLimit_       = 5;     // N2 retries — 5 is enough for LoRa
-  uint8_t dedMaxFrame_         = 1;     // window=1 — LoRa links must not pipeline
+  uint8_t dedRetryLimit_       = 12;    // More retries while tuning faster LoRa profiles
+  uint8_t dedMaxFrame_         = 2;     // Lab profile may pipeline lightly for throughput
   bool    dedTxEnabled_        = true;
   uint8_t dedSrttA1_           = 7;
   uint8_t dedSrttA2_           = 15;
   uint8_t dedSrttA3_           = 3;
-  uint8_t dedIPollFrameLength_ = 64;    // PACLEN for LoRa
+  uint8_t dedIPollFrameLength_ = 64;    // Fits LinFBB 64-byte host blocks in one I-frame
   bool    dedEightBitTerminal_ = true;
   bool    dedValidateCallsign_ = true;
-  uint16_t dedT2_              = 100;   // T2 = 1000 ms — delay before unsolicited RR; reduces LoRa channel load
+  uint16_t dedT2_              = 20;    // T2 = 200 ms for quicker RR/ACK turnaround in lab tests
   uint16_t dedT3_              = 18000;
   ax25::Address dedUnprotoDestination_{};
   char    dedMonitorMode_[20]  = "IU";

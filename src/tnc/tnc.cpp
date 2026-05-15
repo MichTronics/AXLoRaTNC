@@ -1017,11 +1017,18 @@ void Tnc::handleConsoleLine(char* line) {
       kissParams_.persistence = 255;
       kissParams_.slotTime   = 1;
       kissParams_.fullDuplex = 0;
+      dedFrack_ = 3000;
+      dedRetryLimit_ = 12;
+      dedMaxFrame_ = 2;
+      dedT2_ = 20;
+      dedIPollFrameLength_ = 64;
       dutyCycleEnabled_ = false;
       radio::driver().setDutyCycle(false, dutyCyclePpm_);
+      applyDedLinkConfig();
       saveRadioConfig();
       saveKissConfig();
-      Serial.println("profile=fast txdelay=0 p=255 slot=1 fulldup=0 duty=off");
+      saveDedConfig();
+      Serial.println("profile=fast txdelay=0 p=255 slot=1 fulldup=0 duty=off I=64 O=2 F=3000 N=12 T2=20");
       Serial.println("WARNING: fast profile disables duty-cycle guard. Use only on dummy load/lab setups.");
     } else if (strcmp(arg, "normal") == 0 || strcmp(arg, "default") == 0) {
       kissParams_.txDelay    = 30;
@@ -2019,13 +2026,13 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     dedEcho_ = true;
     dedTimestamp_ = false;
     dedDamaTimeout_ = 120;
-    dedFrack_ = 1500;
+    dedFrack_ = 3000;
     dedHeardMode_ = 0;
-    dedRetryLimit_ = 5;
-    dedMaxFrame_ = 1;
-    kissParams_.persistence = 32;
-    kissParams_.txDelay = 25;
-    kissParams_.slotTime = 10;
+    dedRetryLimit_ = 12;
+    dedMaxFrame_ = 2;
+    kissParams_.persistence = 255;
+    kissParams_.txDelay = 0;
+    kissParams_.slotTime = 1;
     kissParams_.fullDuplex = 0;
     dedTxEnabled_ = true;
     dedMaxIncoming_ = 4;
@@ -2033,9 +2040,9 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     dedXonXoff_ = true;
     dedCtextMode_ = 0;
     dedUnattended_ = false;
-    dedT2_ = 100;
+    dedT2_ = 20;
     dedT3_ = 18000;
-    dedIPollFrameLength_ = 60;
+    dedIPollFrameLength_ = 64;
     strncpy(dedMonitorMode_, "IU", sizeof(dedMonitorMode_) - 1);
     monitorEnabled_ = true;
     applyDedLinkConfig();
@@ -2781,11 +2788,10 @@ size_t Tnc::dedConnectedFrameCapacity(uint8_t chIdx) const {
       link.connectedQueueFree() == 0) {
     return 0;
   }
-  // WA8DED @B reports free host-buffer bytes.  With MAXFRAME=1 and I=60,
-  // 13 queued frames plus 1 open transmit-window slot gives the classic
-  // 14 * 60 = 840 bytes when the channel is completely free.  As LinFBB fills
-  // the buffer this value drops, and it rises again as queued/outstanding
-  // frames are transmitted and acknowledged.
+  // WA8DED @B reports free host-buffer bytes. With the current lab profile,
+  // the 13-frame host queue plus the open transmit-window slots advertise a
+  // larger burst only when the channel is completely idle. As LinFBB fills the
+  // buffer, @B drops to 0 until LoRa drains and ACKs the queued data.
   if (link.connectedQueueSize() != 0 ||
       link.outstandingFrameCount() != 0 ||
       link.connectedWindowFree() == 0) {
@@ -3504,9 +3510,15 @@ void Tnc::setSerialMode(SerialMode mode) {
   serialMode_   = mode;
   dedHostMode_  = false;
   if (mode == SerialMode::Wa8ded) {
-    kissParams_.txDelay = 25;
-    kissParams_.persistence = 32;
-    kissParams_.slotTime = 10;
+    kissParams_.txDelay = 0;
+    kissParams_.persistence = 255;
+    kissParams_.slotTime = 1;
+    dedFrack_ = 3000;
+    dedRetryLimit_ = 12;
+    dedMaxFrame_ = 2;
+    dedT2_ = 20;
+    dedIPollFrameLength_ = 64;
+    applyDedLinkConfig();
   }
   kissActive_   = false;
   linePos_      = 0;
