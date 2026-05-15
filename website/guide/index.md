@@ -103,8 +103,8 @@ AXLoRaTNC works with any standard KISS or WA8DED host application:
 |---|---|---|
 | kissattach (Linux) | KISS | Standard AX.25 stack |
 | Dire Wolf | KISS | Set device to the ESP32 serial port |
-| LinBPQ / BPQ32 | KISS or WA8DED | See [BPQ setup guide](/guide/bpq); port type `DED` for WA8DED |
-| F6FBB | KISS or WA8DED | Host type `D` for WA8DED |
+| LinBPQ / BPQ32 | KISS | See [BPQ setup guide](/guide/bpq) |
+| F6FBB / LinFBB | KISS | Recommended: Linux AX.25 + [FBB KISS guide](/guide/fbb-kiss) |
 | TFPCX + TSTHOST | WA8DED | See [WA8DED guide](/guide/wa8ded) |
 | WinPack | WA8DED | TNC type WA8DED |
 | JNOS | WA8DED | Interface type `asy`, tnc `ded` |
@@ -118,7 +118,8 @@ AXLoRaTNC works with any standard KISS or WA8DED host application:
 
 - [Radio config](/guide/radio-config) — change frequency, bandwidth, SF, TX power
 - [KISS mode](/guide/kiss) — kissattach, Dire Wolf, port settings
+- [LinFBB / F6FBB KISS](/guide/fbb-kiss) — recommended BBS setup
 - [APRS](/guide/aprs) — position beacons, digipeater, mheard table
-- [WA8DED hostmode](/guide/wa8ded) — F6FBB, Graphic Packet, PaxTerm
+- [WA8DED hostmode](/guide/wa8ded) — legacy hostmode compatibility
 - [NET/ROM & BBS](/guide/netrom-bbs) — node shell, mailbox
 - [BPQ / LinBPQ setup](/guide/bpq) — complete working config

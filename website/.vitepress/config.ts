@@ -29,6 +29,7 @@ export default defineConfig({
           { text: 'Getting started',    link: '/guide/' },
           { text: 'Radio config',       link: '/guide/radio-config' },
           { text: 'KISS mode',          link: '/guide/kiss' },
+          { text: 'LinFBB / F6FBB KISS', link: '/guide/fbb-kiss' },
           { text: 'WA8DED hostmode',    link: '/guide/wa8ded' },
           { text: 'APRS',               link: '/guide/aprs' },
           { text: 'NET/ROM & BBS',      link: '/guide/netrom-bbs' },

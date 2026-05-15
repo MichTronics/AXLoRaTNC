@@ -45,8 +45,10 @@ void LinkLayer::loop() {
       t2_.stop();
       t2PendingAck_ = false;
       setState(LinkState::Recovery);
+      LOG_PROTO("AX25 TX RR P=1 NR=%u reason=T1_RECOVERY outstanding=%u", vr_, outstandingCount());
       sendSupervisory(SFrameType::RR, true);
     } else if (state_ == LinkState::Recovery) {
+      LOG_PROTO("AX25 TX RR P=1 NR=%u reason=T1_RETRY retry=%u", vr_, retryCount_);
       sendSupervisory(SFrameType::RR, true);
     } else if (state_ == LinkState::Connecting) {
       sendUnnumbered(UFrameType::SABM);
@@ -57,9 +59,14 @@ void LinkLayer::loop() {
   }
   if (state_ == LinkState::Connected && t2_.expired()) {
     t2PendingAck_ = false;
-    sendSupervisory(SFrameType::RR);  // Deferred ack
+    t2_.stop();
+    LOG_PROTO("AX25 T2 deferred-ACK TX RR NR=%u", vr_);
+    sendSupervisory(SFrameType::RR);
   }
   if (state_ == LinkState::Connected && t3_.expired()) {
+    t2_.stop();
+    t2PendingAck_ = false;
+    LOG_PROTO("AX25 T3 keepalive TX RR NR=%u", vr_);
     sendSupervisory(SFrameType::RR);
     t3_.start(config_.t3Ms);
   }
@@ -382,6 +389,8 @@ void LinkLayer::deferAck() {
   if (!t2PendingAck_) {
     t2PendingAck_ = true;
     t2_.start(config_.t2Ms);
+    LOG_PROTO("AX25 T2 armed deferred-ACK NR=%u t2=%lums", vr_,
+              static_cast<unsigned long>(config_.t2Ms));
   }
 }
 
@@ -451,7 +460,11 @@ void LinkLayer::handleI(const Frame& frame) {
     while (receiveBuffered(vr_, buffered)) {
       deliverIFrame(buffered);
     }
-    if (frame.command && ((frame.control & 0x10) != 0)) {
+    const bool pollBit = frame.command && ((frame.control & 0x10) != 0);
+    if (pollBit) {
+      t2_.stop();
+      t2PendingAck_ = false;
+      LOG_PROTO("AX25 TX RR F=1 NR=%u reason=I_POLL_RESPONSE", vr_);
       sendSupervisoryFinal(SFrameType::RR, vr_);
     } else {
       deferAck();
@@ -499,8 +512,19 @@ void LinkLayer::handleS(const Frame& frame) {
     return;
   }
   const bool finalBit = (frame.control & 0x10) != 0;
-  processAck(nr(frame.control));
+  const uint8_t rxNr = nr(frame.control);
+  LOG_PROTO("AX25 RX %s%s NR=%u pf=%u cmd=%u VR=%u VS=%u VA=%u state=%s",
+            sType(frame.control) == SFrameType::RR  ? "RR"  :
+            sType(frame.control) == SFrameType::RNR ? "RNR" :
+            sType(frame.control) == SFrameType::REJ ? "REJ" : "SREJ",
+            finalBit ? (frame.command ? "p" : "v") : "",
+            rxNr, finalBit ? 1 : 0, frame.command ? 1 : 0,
+            vr_, vs_, va_, stateName(state_));
+  processAck(rxNr);
   if (frame.command && finalBit) {
+    t2_.stop();
+    t2PendingAck_ = false;
+    LOG_PROTO("AX25 TX RR F=1 NR=%u reason=POLL_RESPONSE", vr_);
     sendSupervisoryFinal(SFrameType::RR, vr_);
   }
   switch (sType(frame.control)) {
@@ -511,7 +535,7 @@ void LinkLayer::handleS(const Frame& frame) {
         LOG_PROTO("AX25 peer RNR cleared");
       }
       if (state_ == LinkState::Recovery && finalBit) {
-        LOG_PROTO("AX25 recovery complete via RR F=1");
+        LOG_PROTO("AX25 recovery complete via RR F=1 outstanding=%u", outstandingCount());
         setState(LinkState::Connected);
         retryCount_ = 0;
         if (hasOutstanding()) {

@@ -295,9 +295,10 @@ void Tnc::serviceRawTx(bool radioReady) {
   if (result == radio::Result::Ok) {
     rawTxQueue_.pop(tx);
     ++rawTx_;
-    // Echo transmitted frame on KISS so monitoring tools (e.g. GraphicPacket) see TX frames.
-    // Skip in KISS mode: the KISS host supplied the frame and doesn't need it echoed back.
-    if (serialMode_ != SerialMode::Kiss && tx.len >= 2) {
+    // Echo transmitted frames as KISS only on the console port. In WA8DED hostmode
+    // the same serial stream belongs to the host protocol and raw KISS bytes would
+    // force clients such as LinFBB to resync before seeing pending events.
+    if (serialMode_ == SerialMode::Console && tx.len >= 2) {
       emitKissData(tx.data, tx.len - 2);
     }
     // Restart T1 from now — frame is on air. Corrects for CSMA + LoRa airtime delay.
@@ -398,7 +399,9 @@ void Tnc::serviceRadio() {
   {  // FCS OK
     LOG_RADIO("rx ok len=%u rssi=%.0f snr=%.0f", static_cast<unsigned>(rx.len),
               static_cast<double>(rx.rssi), static_cast<double>(rx.snr));
-    emitKissData(rx.data, rx.len - 2);
+    if (serialMode_ == SerialMode::Console || serialMode_ == SerialMode::Kiss) {
+      emitKissData(rx.data, rx.len - 2);
+    }
     if (serialMode_ == SerialMode::Kiss) return;
     ax25::Frame frame{};
     if (ax25::decodeFrame(rx.data, rx.len, frame, true)) {
@@ -820,6 +823,7 @@ void Tnc::handleConsoleLine(char* line) {
       dutyCycleEnabled_ = false;
       radio::driver().setDutyCycle(false, dutyCyclePpm_);
       saveRadioConfig();
+      saveKissConfig();
       Serial.println("profile=fast txdelay=0 p=255 slot=1 fulldup=0 duty=off");
       Serial.println("WARNING: fast profile disables duty-cycle guard. Use only on dummy load/lab setups.");
     } else if (strcmp(arg, "normal") == 0 || strcmp(arg, "default") == 0) {
@@ -831,6 +835,7 @@ void Tnc::handleConsoleLine(char* line) {
       dutyCyclePpm_ = variant::DUTY_CYCLE_PPM;
       radio::driver().setDutyCycle(true, dutyCyclePpm_);
       saveRadioConfig();
+      saveKissConfig();
       Serial.printf("profile=normal txdelay=30 p=63 slot=10 fulldup=0 duty=%.3f%%\n",
                     static_cast<double>(dutyCyclePpm_) / 10000.0);
     } else {
@@ -1473,6 +1478,10 @@ bool Tnc::sendConnectedChunked(uint8_t chIdx, const uint8_t* data, size_t len) {
   const size_t paclen = (dedIPollFrameLength_ > 0)
       ? static_cast<size_t>(dedIPollFrameLength_)
       : ax25::MAX_INFO_LEN;
+  const size_t neededFrames = (len + paclen - 1) / paclen;
+  if (neededFrames > dedConnectedFrameCapacity(chIdx)) {
+    return false;
+  }
   size_t offset = 0;
   bool allQueued = true;
   while (offset < len) {
@@ -2485,25 +2494,32 @@ void Tnc::sendDedCounted(uint8_t channel, uint8_t code, const uint8_t* data, siz
 }
 
 unsigned Tnc::dedFreeBufferBytes(uint8_t channel) const {
-  const unsigned packetBytes = static_cast<unsigned>(
-      dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : ax25::MAX_INFO_LEN);
-
-  auto channelCanAccept = [&](uint8_t chIdx) {
-    if (chIdx >= CHANNEL_COUNT) return false;
-    const ax25::LinkLayer& link = channels_[chIdx].link;
-    if (link.connectedPeerBusy() || link.connectedQueueFree() == 0) return false;
-    if (link.state() != ax25::LinkState::Connected) return true;
-    return link.connectedQueueSize() == 0;
-  };
-
   if (channel >= 1 && channel <= CHANNEL_COUNT) {
-    return channelCanAccept(channel - 1) ? (packetBytes > 255U ? 255U : packetBytes) : 0U;
+    const size_t frames = dedConnectedFrameCapacity(channel - 1);
+    return frames > 255U ? 255U : static_cast<unsigned>(frames);
   }
 
+  size_t best = 1;  // channel 0/UI can accept one host frame at a time
   for (uint8_t chIdx = 0; chIdx < CHANNEL_COUNT; ++chIdx) {
-    if (channelCanAccept(chIdx)) return packetBytes > 255U ? 255U : packetBytes;
+    const size_t frames = dedConnectedFrameCapacity(chIdx);
+    if (frames > best) best = frames;
   }
-  return 0;
+  return best > 255U ? 255U : static_cast<unsigned>(best);
+}
+
+size_t Tnc::dedConnectedFrameCapacity(uint8_t chIdx) const {
+  if (chIdx >= CHANNEL_COUNT) return 0;
+  const ax25::LinkLayer& link = channels_[chIdx].link;
+  if (link.state() != ax25::LinkState::Connected ||
+      link.connectedPeerBusy() ||
+      link.connectedQueueFree() == 0) {
+    return 0;
+  }
+  size_t frames = link.connectedQueueFree();
+  if (link.connectedQueueSize() == 0) {
+    frames += link.connectedWindowFree();
+  }
+  return frames;
 }
 
 bool Tnc::enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len) {
@@ -3141,6 +3157,16 @@ void Tnc::saveDedConfig() {
   char uproto[16]{};
   addressToText(dedUnprotoDestination_, uproto, sizeof(uproto));
   prefs.putString("d_uproto", uproto);
+  prefs.end();
+}
+
+void Tnc::saveKissConfig() {
+  Preferences prefs;
+  if (!prefs.begin("axloratnc", false)) return;
+  prefs.putUChar("d_txdel", kissParams_.txDelay);
+  prefs.putUChar("d_slot",  kissParams_.slotTime);
+  prefs.putUChar("d_pers",  kissParams_.persistence);
+  prefs.putUChar("d_fdup",  kissParams_.fullDuplex);
   prefs.end();
 }
 

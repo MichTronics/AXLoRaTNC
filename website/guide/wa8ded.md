@@ -1,6 +1,8 @@
 # WA8DED hostmode
 
-AXLoRaTNC implements the WA8DED binary host mode protocol, compatible with F6FBB, TFPCX/TSTHOST, WinPack, BPQ32/LinBPQ (DED port type), Graphic Packet, PaxTerm, and JNOS.
+AXLoRaTNC implements the WA8DED binary host mode protocol for legacy host
+software. For LinFBB/F6FBB, the recommended setup is KISS through Linux AX.25;
+see the [FBB KISS guide](/guide/fbb-kiss).
 
 ## Enable hostmode
 
@@ -91,11 +93,11 @@ Example: `M IU` (default) reports UI traffic and connection control frames but n
 
 ### Buffer query (`@B`)
 
-Query the number of free TX bytes available on the selected channel:
+Query the number of free TX buffers available on the selected channel:
 
 ```
 host → tnc:  [ch] [1] [2] @B\0
-tnc  → host: [ch] [1] <free-bytes as text>
+tnc  → host: [ch] [1] <free-buffers as text>
 ```
 
 ### Reset to defaults (`@Q` / `QRES`)

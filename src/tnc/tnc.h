@@ -173,6 +173,7 @@ class Tnc {
   void sendDedText(uint8_t channel, uint8_t code, const char* text);
   void sendDedCounted(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   unsigned dedFreeBufferBytes(uint8_t channel) const;
+  size_t dedConnectedFrameCapacity(uint8_t chIdx) const;
   bool enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   size_t pendingDedEvents(uint8_t channel, uint8_t wanted = 0);
   bool popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out);
@@ -216,6 +217,7 @@ class Tnc {
   void loadSettings();
   void saveSettings();
   void saveDedConfig();
+  void saveKissConfig();
   void saveRadioConfig();
   void beginLink(uint8_t chIdx, const ax25::Address& local);
   void resetLinksForLocal();
@@ -309,7 +311,7 @@ class Tnc {
   uint32_t rawTxDeferred_   = 0;
   uint32_t rawTxQueueDrops_ = 0;
   uint32_t nextRawTxAttemptMs_ = 0;
-  axlora::util::RingBuffer<PendingRawTx, 16> rawTxQueue_;
+  axlora::util::RingBuffer<PendingRawTx, 64> rawTxQueue_;
   uint32_t beaconTx_        = 0;
   uint32_t beaconDrops_     = 0;
   uint32_t netromBroadcasts_  = 0;

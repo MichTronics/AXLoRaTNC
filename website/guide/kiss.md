@@ -23,17 +23,21 @@ The mode is stored in NVS. To recover the console from KISS mode, type the plain
 | kissattach (AX.25 for Linux) | Standard usage |
 | Dire Wolf | Set `ADEVICE` to the ESP32 serial port |
 | LinBPQ / BPQ32 | See [BPQ setup guide](/guide/bpq) |
-| F6FBB (KISS mode) | Standard KISS TNC |
+| F6FBB / LinFBB | Recommended via Linux AX.25; see [FBB KISS guide](/guide/fbb-kiss) |
 | APRS clients | Any client supporting KISS TNCs |
 
 ## kissattach example (Linux)
 
 ```sh
 sudo kissattach /dev/ttyUSB0 radio 44.137.x.x
-sudo kissparms -c 1 -t 100 -s 10 -r 63 -p radio
+sudo kissparms -c 1 -t 0 -s 10 -r 255 -p radio
 ```
 
 Replace `/dev/ttyUSB0` with the actual device path. Prefer `/dev/serial/by-id/...` for a stable name across reboots.
+
+For connected-mode BBS traffic over LoRa, use `PACLEN` around 40-64 and
+`MAXFRAME`/window 1 on the host. If `stats` shows `qdrops`, the host is sending
+faster than the radio queue can drain.
 
 ## Baud rate
 
