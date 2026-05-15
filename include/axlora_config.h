@@ -1,6 +1,6 @@
 #pragma once
 
-#if !defined(AXLORA_VARIANT_DEVKITV1_E22) && !defined(AXLORA_VARIANT_HELTEC_V3) && !defined(AXLORA_VARIANT_TBEAM) && !defined(AXLORA_VARIANT_LILYGO_T3_V161)
+#if !defined(AXLORA_VARIANT_DEVKITV1_E22) && !defined(AXLORA_VARIANT_HELTEC_V3) && !defined(AXLORA_VARIANT_TBEAM) && !defined(AXLORA_VARIANT_LILYGO_T3_V161) && !defined(AXLORA_VARIANT_TBEAM_SUPREME_433)
 #error "Select an AXLoRa hardware variant with a build flag, for example -DAXLORA_VARIANT_DEVKITV1_E22"
 #endif
 

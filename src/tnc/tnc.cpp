@@ -3592,6 +3592,9 @@ void Tnc::applySerialBaud() {
   uint32_t baud = variant::SERIAL_BAUD;
   if (serialMode_ == SerialMode::Kiss)   baud = baudKiss_;
   if (serialMode_ == SerialMode::Wa8ded) baud = baudDed_;
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+  Serial.begin(baud);
+#else
   Serial.updateBaudRate(baud);
   // Hardware RTS/CTS flow control: only active in non-console modes where the
   // host may be an old DOS application that drives flow-control lines.
@@ -3606,6 +3609,7 @@ void Tnc::applySerialBaud() {
       Serial.setHwFlowCtrlMode(UART_HW_FLOWCTRL_DISABLE, 0);
     }
   }
+#endif
 }
 
 const char* Tnc::serialModeName() const {

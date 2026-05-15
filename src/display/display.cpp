@@ -13,8 +13,11 @@ namespace {
 static constexpr uint8_t kOledRst = static_cast<uint8_t>(
     axlora::variant::PIN_OLED_RST >= 0 ? axlora::variant::PIN_OLED_RST : 255);
 
-// SSD1306 128×64 full-buffer hardware I2C. Change to SH1106 if you have that chip.
+#if defined(AXLORA_OLED_SH1106)
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, kOledRst);
+#else
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, kOledRst);
+#endif
 
 static constexpr uint8_t PAGE_COUNT       = 6;
 static constexpr uint8_t PAGE_DWELL_TICKS = 4;  // calls to update() per page (= 4 s)

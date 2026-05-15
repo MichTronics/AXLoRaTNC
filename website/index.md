@@ -26,7 +26,7 @@ features:
   - title: NET/ROM & BBS
     details: NET/ROM NODES broadcast, route table with auto-expiry. Connected node shell with INFO, NODES, MHEARD commands and a built-in NVS mailbox BBS.
   - title: Supported hardware
-    details: "ESP32 DevKit V1 + EBYTE E22 (SX1262) · Heltec WiFi LoRa 32 V3 (ESP32-S3) · TTGO T-Beam (SX1276) · LilyGo T3 LoRa32 V1.6.1"
+    details: "ESP32 DevKit V1 + EBYTE E22 (SX1262) · Heltec WiFi LoRa 32 V3 (ESP32-S3) · TTGO T-Beam (SX1276) · LilyGo T3 LoRa32 V1.6.1 · LILYGO T-Beam SUPREME 433MHz"
   - title: Persistent config
     details: All settings — callsign, radio params, beacon, digi, NET/ROM alias, BBS messages — survive reboots via ESP32 NVS flash storage.
 ---

@@ -29,6 +29,11 @@ VARIANTS = {
         "name": "LilyGo T3 LoRa32 V1.6.1",
         "bootloader_offset": 0x1000,
     },
+    "tbeam_supreme_433": {
+        "chip": "ESP32-S3",
+        "name": "LILYGO T-Beam SUPREME 433MHz (SX1262)",
+        "bootloader_offset": 0x0,
+    },
 }
 
 

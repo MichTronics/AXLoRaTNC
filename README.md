@@ -18,6 +18,7 @@ Use the browser-based installer — no drivers or tools needed. Works in Chrome 
 | Heltec WiFi LoRa 32 V3 | ESP32-S3 | SX1262 | `heltec_v3` | ⚠ not tested |
 | TTGO T-Beam | ESP32 | SX1276 | `tbeam` | ⚠ not tested |
 | LilyGo T3 LoRa32 V1.6.1 | ESP32 | SX1276 | `lilygo_t3_v161` | ✅ tested |
+| LILYGO T-Beam SUPREME 433MHz | ESP32-S3 | SX1262 | `tbeam_supreme_433` | ⚠ not tested |
 
 ## Build from source
 

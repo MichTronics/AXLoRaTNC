@@ -11,6 +11,7 @@ BOARDS = [
     {"id": "heltec_v3",      "name": "Heltec WiFi LoRa 32 V3",       "chip": "ESP32-S3"},
     {"id": "tbeam",          "name": "TTGO T-Beam",                   "chip": "ESP32"},
     {"id": "lilygo_t3_v161", "name": "LilyGo T3 LoRa32 V1.6.1",     "chip": "ESP32"},
+    {"id": "tbeam_supreme_433", "name": "LILYGO T-Beam SUPREME 433MHz", "chip": "ESP32-S3"},
 ]
 
 # Manifest path template used by the webflasher ('{board}' is replaced client-side).

@@ -18,3 +18,4 @@ website/.vitepress/dist/
 website/.vitepress/cache/
 website/node_modules/
 source/
+scripts/debug.log
