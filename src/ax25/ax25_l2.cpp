@@ -35,6 +35,7 @@ void LinkLayer::loop() {
       t2_.stop();
       t2PendingAck_ = false;
       t4_.stop();
+      clearRejPending();
       setState(LinkState::Disconnected);
       return;
     }
@@ -46,9 +47,13 @@ void LinkLayer::loop() {
       t2_.stop();
       t2PendingAck_ = false;
       setState(LinkState::Recovery);
+      LOG_PROTO("AX25 T1 recovery retransmit outstanding=%u", outstandingCount());
+      retransmitWindow();
       LOG_PROTO("AX25 TX RR P=1 NR=%u reason=T1_RECOVERY outstanding=%u", vr_, outstandingCount());
       sendSupervisory(SFrameType::RR, true);
-    } else if (state_ == LinkState::Recovery) {
+    } else if (state_ == LinkState::Recovery && hasOutstanding()) {
+      LOG_PROTO("AX25 T1 recovery retry retransmit outstanding=%u retry=%u", outstandingCount(), retryCount_);
+      retransmitWindow();
       LOG_PROTO("AX25 TX RR P=1 NR=%u reason=T1_RETRY retry=%u", vr_, retryCount_);
       sendSupervisory(SFrameType::RR, true);
     } else if (state_ == LinkState::Connecting) {
@@ -57,6 +62,13 @@ void LinkLayer::loop() {
       sendUnnumbered(UFrameType::DISC);
     }
     t1_.start(config_.t1Ms);
+  }
+  if ((state_ == LinkState::Connected || state_ == LinkState::Recovery) &&
+      rejPending_ &&
+      static_cast<uint32_t>(millis() - rejLastSentMs_) >= REJ_REPEAT_MS) {
+    LOG_PROTO("AX25 REJ repeat NR=%u", rejNr_);
+    sendSupervisoryNr(SFrameType::REJ, rejNr_);
+    rejLastSentMs_ = millis();
   }
   if (state_ == LinkState::Connected && t2_.expired()) {
     t2PendingAck_ = false;
@@ -107,6 +119,7 @@ bool LinkLayer::connectTo(const Address& destination) {
   peerBusy_ = false;
   t2_.stop();
   t2PendingAck_ = false;
+  clearRejPending();
   clearReceiveBuffer();
   txQueue_.clear();
   setState(LinkState::Connecting);
@@ -121,6 +134,7 @@ bool LinkLayer::disconnect() {
   txQueue_.clear();
   t2_.stop();
   t2PendingAck_ = false;
+  clearRejPending();
   clearReceiveBuffer();
   setState(LinkState::Disconnecting);
   return sendUnnumbered(UFrameType::DISC);
@@ -188,6 +202,7 @@ bool LinkLayer::setLocalAddress(const Address& local) {
   t3_.stop();
   t4_.stop();
   t2PendingAck_ = false;
+  clearRejPending();
   clearWindow();
   clearReceiveBuffer();
   txQueue_.clear();
@@ -345,6 +360,7 @@ void LinkLayer::clearReceiveBuffer() {
   for (bool& pending : srejPending_) {
     pending = false;
   }
+  clearRejPending();
 }
 
 bool LinkLayer::receiveBuffered(uint8_t nsValue, Frame& out) {
@@ -382,6 +398,9 @@ bool LinkLayer::inReceiveWindow(uint8_t nsValue) const {
 void LinkLayer::deliverIFrame(const Frame& frame) {
   srejPending_[ns(frame.control)] = false;
   vr_ = static_cast<uint8_t>((vr_ + 1) & 0x07);
+  if (rejPending_ && rejNr_ == ns(frame.control)) {
+    clearRejPending();
+  }
   ++stats_.iRx;
   if (data_ != nullptr) {
     data_(frame.info, frame.infoLen, true, ctx_);
@@ -395,6 +414,25 @@ void LinkLayer::deferAck() {
     LOG_PROTO("AX25 T2 armed deferred-ACK NR=%u t2=%lums", vr_,
               static_cast<unsigned long>(config_.t2Ms));
   }
+}
+
+void LinkLayer::clearRejPending() {
+  rejPending_ = false;
+  rejNr_ = 0;
+  rejLastSentMs_ = 0;
+}
+
+void LinkLayer::requestRej(uint8_t nrValue, bool final) {
+  t2_.stop();
+  t2PendingAck_ = false;
+  if (final) {
+    sendSupervisoryFinal(SFrameType::REJ, nrValue);
+  } else {
+    sendSupervisoryNr(SFrameType::REJ, nrValue);
+  }
+  rejPending_ = true;
+  rejNr_ = nrValue;
+  rejLastSentMs_ = millis();
 }
 
 bool LinkLayer::sendSupervisoryFrame(SFrameType type, uint8_t nrValue, bool pf, bool command) {
@@ -475,23 +513,11 @@ void LinkLayer::handleI(const Frame& frame) {
       deferAck();
     }
   } else if (inReceiveWindow(ns(frame.control)) && storeReceiveBuffered(frame)) {
-    LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending SREJ", ns(frame.control), vr_);
-    if (!srejPending_[vr_]) {
-      srejPending_[vr_] = true;
-      ++stats_.srejTx;
-      if (frame.command && ((frame.control & 0x10) != 0)) {
-        sendSupervisoryFinal(SFrameType::SREJ, vr_);
-      } else {
-        sendSupervisoryNr(SFrameType::SREJ, vr_);
-      }
-    }
+    LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending REJ", ns(frame.control), vr_);
+    requestRej(vr_, frame.command && ((frame.control & 0x10) != 0));
   } else {
     LOG_PROTO("AX25 out-of-seq I NS=%u VR=%u, sending REJ", ns(frame.control), vr_);
-    if (frame.command && ((frame.control & 0x10) != 0)) {
-      sendSupervisoryFinal(SFrameType::REJ, vr_);
-    } else {
-      sendSupervisory(SFrameType::REJ);
-    }
+    requestRej(vr_, frame.command && ((frame.control & 0x10) != 0));
   }
 }
 

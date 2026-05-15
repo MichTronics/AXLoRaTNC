@@ -118,6 +118,8 @@ class LinkLayer {
   bool inReceiveWindow(uint8_t nsValue) const;
   void deliverIFrame(const Frame& frame);
   void deferAck();
+  void clearRejPending();
+  void requestRej(uint8_t nrValue, bool final);
   bool sendSupervisoryFrame(SFrameType type, uint8_t nrValue, bool pf, bool command);
   bool sendSupervisoryNr(SFrameType type, uint8_t nrValue, bool poll = false);
   bool sendSupervisoryFinal(SFrameType type, uint8_t nrValue);
@@ -148,6 +150,10 @@ class LinkLayer {
   WindowSlot window_[WINDOW_SIZE]{};
   ReceiveSlot receiveWindow_[WINDOW_SIZE]{};
   bool srejPending_[8]{};
+  static constexpr uint32_t REJ_REPEAT_MS = 2000;
+  bool rejPending_ = false;
+  uint8_t rejNr_ = 0;
+  uint32_t rejLastSentMs_ = 0;
   Timer t1_;
   Timer t2_;
   Timer t3_;

@@ -242,6 +242,8 @@ class Tnc {
   unsigned dedFreeBufferBytes(uint8_t channel) const;
   size_t dedConnectedFrameCapacity(uint8_t chIdx) const;
   size_t dedConnectedAcceptFrameCapacity(uint8_t chIdx) const;
+  static constexpr size_t DED_LAB_IDLE_CREDIT_FRAMES = 6;
+  static constexpr size_t DED_LAB_STREAM_CREDIT_FRAMES = 3;
   bool enqueueDedEvent(uint8_t channel, uint8_t code, const uint8_t* data, size_t len);
   size_t pendingDedEvents(uint8_t channel, uint8_t wanted = 0);
   bool popDedEvent(uint8_t channel, uint8_t wanted, DedEvent& out);
@@ -341,15 +343,15 @@ class Tnc {
   uint8_t dedSelectedChannel_  = 0;
   uint8_t dedMaxIncoming_      = 4;
   uint16_t dedDamaTimeout_     = 120;
-  uint16_t dedFrack_           = 3000;  // T1 = 30000 ms for lab-speed LoRa/BBS tests
+  uint16_t dedFrack_           = 500;   // T1 = 5000 ms for quick LoRa/BBS recovery
   uint8_t dedHeardMode_        = 0;
-  uint8_t dedRetryLimit_       = 12;    // More retries while tuning faster LoRa profiles
-  uint8_t dedMaxFrame_         = 2;     // Lab profile may pipeline lightly for throughput
+  uint8_t dedRetryLimit_       = 20;    // More retries while tuning faster LoRa profiles
+  uint8_t dedMaxFrame_         = 3;     // Lab profile pipelines a few frames for throughput
   bool    dedTxEnabled_        = true;
   uint8_t dedSrttA1_           = 7;
   uint8_t dedSrttA2_           = 15;
   uint8_t dedSrttA3_           = 3;
-  uint8_t dedIPollFrameLength_ = 64;    // Fits LinFBB 64-byte host blocks in one I-frame
+  uint8_t dedIPollFrameLength_ = 128;   // Larger lab PACLEN for faster LinFBB text bursts
   bool    dedEightBitTerminal_ = true;
   bool    dedValidateCallsign_ = true;
   uint16_t dedT2_              = 20;    // T2 = 200 ms for quicker RR/ACK turnaround in lab tests

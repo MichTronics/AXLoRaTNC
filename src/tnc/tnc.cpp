@@ -1017,18 +1017,18 @@ void Tnc::handleConsoleLine(char* line) {
       kissParams_.persistence = 255;
       kissParams_.slotTime   = 1;
       kissParams_.fullDuplex = 0;
-      dedFrack_ = 3000;
-      dedRetryLimit_ = 12;
-      dedMaxFrame_ = 2;
+      dedFrack_ = 500;
+      dedRetryLimit_ = 20;
+      dedMaxFrame_ = 3;
       dedT2_ = 20;
-      dedIPollFrameLength_ = 64;
+      dedIPollFrameLength_ = 128;
       dutyCycleEnabled_ = false;
       radio::driver().setDutyCycle(false, dutyCyclePpm_);
       applyDedLinkConfig();
       saveRadioConfig();
       saveKissConfig();
       saveDedConfig();
-      Serial.println("profile=fast txdelay=0 p=255 slot=1 fulldup=0 duty=off I=64 O=2 F=3000 N=12 T2=20");
+      Serial.println("profile=fast txdelay=0 p=255 slot=1 fulldup=0 duty=off I=128 O=3 F=500 N=20 T2=20 @B=6/3");
       Serial.println("WARNING: fast profile disables duty-cycle guard. Use only on dummy load/lab setups.");
     } else if (strcmp(arg, "normal") == 0 || strcmp(arg, "default") == 0) {
       kissParams_.txDelay    = 30;
@@ -2026,10 +2026,10 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     dedEcho_ = true;
     dedTimestamp_ = false;
     dedDamaTimeout_ = 120;
-    dedFrack_ = 3000;
+    dedFrack_ = 500;
     dedHeardMode_ = 0;
-    dedRetryLimit_ = 12;
-    dedMaxFrame_ = 2;
+    dedRetryLimit_ = 20;
+    dedMaxFrame_ = 3;
     kissParams_.persistence = 255;
     kissParams_.txDelay = 0;
     kissParams_.slotTime = 1;
@@ -2042,7 +2042,7 @@ void Tnc::handleDedTerminalLine(const char* line, bool command) {
     dedUnattended_ = false;
     dedT2_ = 20;
     dedT3_ = 18000;
-    dedIPollFrameLength_ = 64;
+    dedIPollFrameLength_ = 128;
     strncpy(dedMonitorMode_, "IU", sizeof(dedMonitorMode_) - 1);
     monitorEnabled_ = true;
     applyDedLinkConfig();
@@ -2277,7 +2277,26 @@ void Tnc::handleDedAtCommand(const char* cmd) {
   if (strcmp(token, "A2") == 0) { setU8("A2", dedSrttA2_, 0, 255); return; }
   if (strcmp(token, "A3") == 0) { setU8("A3", dedSrttA3_, 1, 255); return; }
   if (strcmp(token, "B") == 0) {
-    Serial.printf("@B %u\r\n", dedFreeBufferBytes(dedSelectedChannel_));
+    const unsigned freeBytes = dedFreeBufferBytes(dedSelectedChannel_);
+#if AXLORATNC_TRACE_LINFBB
+    if (dedSelectedChannel_ >= 1 && dedSelectedChannel_ <= CHANNEL_COUNT) {
+      const uint8_t chIdx = dedSelectedChannel_ - 1;
+      const ax25::LinkLayer& link = channels_[chIdx].link;
+      LINFBB_TRACE("DED_FREEBUF ch=%u state=%u q=%u/%u win_free=%u out=%u adv=%u accept=%u",
+                   static_cast<unsigned>(dedSelectedChannel_),
+                   static_cast<unsigned>(link.state()),
+                   static_cast<unsigned>(link.connectedQueueSize()),
+                   static_cast<unsigned>(link.connectedQueueSize() + link.connectedQueueFree()),
+                   static_cast<unsigned>(link.connectedWindowFree()),
+                   static_cast<unsigned>(link.outstandingFrameCount()),
+                   freeBytes,
+                   static_cast<unsigned>(dedConnectedAcceptFrameCapacity(chIdx) *
+                                         (dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : 64u)));
+    } else {
+      LINFBB_TRACE("DED_FREEBUF ch=%u adv=%u", static_cast<unsigned>(dedSelectedChannel_), freeBytes);
+    }
+#endif
+    Serial.printf("@B %u\r\n", freeBytes);
     return;
   }
   if (strcmp(token, "D") == 0) {
@@ -2569,7 +2588,26 @@ void Tnc::handleDedCommand(uint8_t channel, const char* command, size_t len) {
     const char* token = cmd + 1;
     if (token[0] == 'B' && (token[1] == '\0' || token[1] == ' ')) {
       char text[8]{};
-      snprintf(text, sizeof(text), "%u", dedFreeBufferBytes(channel));
+      const unsigned freeBytes = dedFreeBufferBytes(channel);
+      snprintf(text, sizeof(text), "%u", freeBytes);
+#if AXLORATNC_TRACE_LINFBB
+      if (channel >= 1 && channel <= CHANNEL_COUNT) {
+        const uint8_t chIdx = channel - 1;
+        const ax25::LinkLayer& link = channels_[chIdx].link;
+        LINFBB_TRACE("DED_FREEBUF ch=%u state=%u q=%u/%u win_free=%u out=%u adv=%u accept=%u",
+                     static_cast<unsigned>(channel),
+                     static_cast<unsigned>(link.state()),
+                     static_cast<unsigned>(link.connectedQueueSize()),
+                     static_cast<unsigned>(link.connectedQueueSize() + link.connectedQueueFree()),
+                     static_cast<unsigned>(link.connectedWindowFree()),
+                     static_cast<unsigned>(link.outstandingFrameCount()),
+                     freeBytes,
+                     static_cast<unsigned>(dedConnectedAcceptFrameCapacity(chIdx) *
+                                           (dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : 64u)));
+      } else {
+        LINFBB_TRACE("DED_FREEBUF ch=%u adv=%u", static_cast<unsigned>(channel), freeBytes);
+      }
+#endif
       sendDedText(channel, 1, text);
       return;
     }
@@ -2763,15 +2801,34 @@ unsigned Tnc::dedFreeBufferBytes(uint8_t channel) const {
   const unsigned frameBytes = dedIPollFrameLength_ > 0 ? dedIPollFrameLength_ : 64u;
 
   if (channel >= 1 && channel <= CHANNEL_COUNT) {
-    const size_t frames = dedConnectedFrameCapacity(channel - 1);
+    const uint8_t chIdx = channel - 1;
+    const ax25::LinkLayer& link = channels_[chIdx].link;
+    const ax25::LinkState st = link.state();
+    const bool live = (st == ax25::LinkState::Connected ||
+                       st == ax25::LinkState::Recovery);
+    const size_t frames = live
+        ? dedConnectedFrameCapacity(chIdx)
+        : (link.connectedQueueFree() + link.connectedWindowFree());
     return static_cast<unsigned>(frames) * frameBytes;
   }
 
-  // Channel 0 / UI: report capacity of the best available connected channel.
-  // Do not invent a non-zero value when no RF link can currently accept data.
+  // Channel 0 / UI: when no link is active, still report the free host buffer.
+  // Once a link is active, report only the flow-control capacity for that link.
   size_t best = 0;
+  bool anyLive = false;
   for (uint8_t chIdx = 0; chIdx < CHANNEL_COUNT; ++chIdx) {
-    const size_t frames = dedConnectedFrameCapacity(chIdx);
+    const ax25::LinkLayer& link = channels_[chIdx].link;
+    const ax25::LinkState st = link.state();
+    const bool live = (st == ax25::LinkState::Connected ||
+                       st == ax25::LinkState::Recovery);
+    const size_t frames = live
+        ? dedConnectedFrameCapacity(chIdx)
+        : (link.connectedQueueFree() + link.connectedWindowFree());
+    if (live && !anyLive) {
+      anyLive = true;
+      best = 0;
+    }
+    if (anyLive && !live) continue;
     if (frames > best) best = frames;
   }
   return static_cast<unsigned>(best) * frameBytes;
@@ -2788,16 +2845,15 @@ size_t Tnc::dedConnectedFrameCapacity(uint8_t chIdx) const {
       link.connectedQueueFree() == 0) {
     return 0;
   }
-  // WA8DED @B reports free host-buffer bytes. With the current lab profile,
-  // the 13-frame host queue plus the open transmit-window slots advertise a
-  // larger burst only when the channel is completely idle. As LinFBB fills the
-  // buffer, @B drops to 0 until LoRa drains and ACKs the queued data.
-  if (link.connectedQueueSize() != 0 ||
-      link.outstandingFrameCount() != 0 ||
-      link.connectedWindowFree() == 0) {
-    return 0;
+  // Lab flow-control: keep LinFBB streaming in small credits while LoRa drains.
+  // The fully idle case gets a modest start burst; after that we advertise only
+  // queue slots so host data never waits for the RF window to become empty.
+  if (link.connectedQueueSize() == 0 && link.outstandingFrameCount() == 0) {
+    const size_t idleFrames = link.connectedQueueFree() + link.connectedWindowFree();
+    return idleFrames > DED_LAB_IDLE_CREDIT_FRAMES ? DED_LAB_IDLE_CREDIT_FRAMES : idleFrames;
   }
-  return link.connectedQueueFree() + link.connectedWindowFree();
+  const size_t streamFrames = link.connectedQueueFree();
+  return streamFrames > DED_LAB_STREAM_CREDIT_FRAMES ? DED_LAB_STREAM_CREDIT_FRAMES : streamFrames;
 }
 
 size_t Tnc::dedConnectedAcceptFrameCapacity(uint8_t chIdx) const {
@@ -3513,11 +3569,11 @@ void Tnc::setSerialMode(SerialMode mode) {
     kissParams_.txDelay = 0;
     kissParams_.persistence = 255;
     kissParams_.slotTime = 1;
-    dedFrack_ = 3000;
-    dedRetryLimit_ = 12;
-    dedMaxFrame_ = 2;
+    dedFrack_ = 500;
+    dedRetryLimit_ = 20;
+    dedMaxFrame_ = 3;
     dedT2_ = 20;
-    dedIPollFrameLength_ = 64;
+    dedIPollFrameLength_ = 128;
     applyDedLinkConfig();
   }
   kissActive_   = false;
