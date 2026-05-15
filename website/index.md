@@ -8,7 +8,7 @@ hero:
   actions:
     - theme: brand
       text: Flash firmware →
-      link: /AXLoRaTNC/flash/
+      link: /flash/
     - theme: alt
       text: Getting started
       link: /guide/

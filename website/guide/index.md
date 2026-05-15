@@ -16,7 +16,7 @@
 
 No software installation needed. Works in **Chrome** and **Edge** (Web Serial API required).
 
-👉 **[Open the web installer](/AXLoRaTNC/flash/)**
+👉 **[Open the web installer](/flash/)**
 
 1. Select your board
 2. Click **Install AXLoRaTNC**
